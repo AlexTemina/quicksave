@@ -1,0 +1,1 @@
+- [Push con la cuenta personal](reference_push_with_personal_account.md) — `AlexTemina/*` da 403 con AlexTemina-alan; token de `gh auth token --user AlexTemina`
