@@ -1,6 +1,6 @@
 # Writing in Linear
 
-How Quicksave writes issue descriptions it owns, like The One. A reply to a person is a message, not a record, and does not follow this.
+How Quicksave writes issue descriptions it owns, like the Main Quest. A reply to a person is a message, not a record, and does not follow this.
 
 ## Style
 

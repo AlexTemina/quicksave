@@ -11,11 +11,12 @@ Nothing here is inherited from older setups (Save Point, the vault, global rules
 - Never `git commit` or `git push` unless he asks in the same turn.
 - Talk about the product, never the code. Alejandro does not want to see Swift, file names or diffs: report what the app does, what changed for him, and what he has to decide.
 - Every code (issue, PR) carries a 2-3 word tag of what it is: `ES-12785 (30-day invitations)`, never a bare id.
+- The app's interface is in English only, for now.
 - Linear is the source of truth for tasks and their state. Quicksave reads it and never keeps its own copy of a task's state.
 
 ## Docs
 
-- [The One](docs/the-one.md): what it is and how it lives in Linear.
+- [Main Quest](docs/main-quest.md): what it is and how it lives in Linear.
 - [Writing in Linear](docs/linear-writing.md): how Quicksave writes what it owns there.
 
 ## Layout

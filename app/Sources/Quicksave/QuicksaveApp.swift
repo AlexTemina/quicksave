@@ -21,7 +21,7 @@ struct EmptyDay: View {
         VStack(spacing: 8) {
             Image(systemName: "square.and.arrow.down").font(.largeTitle)
             Text("Quicksave").font(.title2.bold())
-            Text("Nada todavía. La primera feature es The One.").foregroundStyle(.secondary)
+            Text("Nothing yet. The first feature is the Main Quest.").foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
