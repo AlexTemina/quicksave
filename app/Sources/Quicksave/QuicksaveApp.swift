@@ -2,27 +2,25 @@ import SwiftUI
 
 @main
 struct QuicksaveApp: App {
+    @StateObject private var store = Store()
+
     var body: some Scene {
         Window("Quicksave", id: "main") {
-            EmptyDay()
-                .frame(minWidth: 480, minHeight: 320)
+            BoardView(store: store)
+                .frame(minWidth: 860, minHeight: 420)
+                .onAppear { store.start() }
         }
-        .defaultSize(width: 720, height: 480)
+        .defaultSize(width: 1000, height: 560)
 
-        MenuBarExtra("Quicksave", systemImage: "square.and.arrow.down") {
-            EmptyDay().padding().frame(width: 280)
+        MenuBarExtra {
+            MenuView(store: store).onAppear { store.start() }
+        } label: {
+            if let q = store.quest { Text("💾 \(q.doneCount)/\(q.pieces.count)") } else { Image(systemName: "square.and.arrow.down") }
         }
         .menuBarExtraStyle(.window)
-    }
-}
 
-struct EmptyDay: View {
-    var body: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "square.and.arrow.down").font(.largeTitle)
-            Text("Quicksave").font(.title2.bold())
-            Text("Nothing yet. The first feature is the Main Quest.").foregroundStyle(.secondary)
+        Settings {
+            SettingsView(store: store)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 }

@@ -18,6 +18,8 @@ Nothing here is inherited from older setups (Save Point, the vault, global rules
 
 - [Main Quest](docs/main-quest.md): what it is and how it lives in Linear.
 - [Writing in Linear](docs/linear-writing.md): how Quicksave writes what it owns there.
+- [The board](docs/board.md): what the app shows and how it stays fresh.
+- [Design system](docs/design-system.md): tokens and components; screens never style by hand.
 
 ## Layout
 
