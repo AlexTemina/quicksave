@@ -7,6 +7,7 @@ final class Store: ObservableObject {
     @Published var quest: MainQuest?
     @Published var stateColors: [String: String] = [:]
     @Published var worktrees: [String: Orca.Match] = [:]
+    @Published var prStatus: [Int: GitHub.Status] = [:]
     @Published var error: String?
     @Published var loading = false
     @Published var lastRefresh: Date?
@@ -40,6 +41,11 @@ final class Store: ObservableObject {
             var found: [String: Orca.Match] = [:]
             for piece in quest?.pieces ?? [] { if let m = await Orca.worktree(for: piece.id) { found[piece.id] = m } }
             worktrees = found
+            var statuses: [Int: GitHub.Status] = [:]
+            for pr in (quest?.pieces ?? []).flatMap(\.pullRequests) {
+                if let st = await GitHub.status(of: pr) { statuses[pr.number] = st }
+            }
+            prStatus = statuses
         } catch {
             self.error = error.localizedDescription
         }

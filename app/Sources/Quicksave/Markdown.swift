@@ -4,16 +4,26 @@ import SwiftUI
 struct MD: View {
     let source: String
     init(_ source: String) { self.source = source }
+    @State private var hovering = false
 
     var body: some View {
-        Text(Self.attributed(source))
-            .tint(.accentColor)
+        let hasLinks = source.contains("](")
+        Text(Self.attributed(source, emphasizeLinks: hasLinks && hovering))
+            .tint(Theme.Palette.link)
+            .lineSpacing(Theme.Leading.body)
             .fixedSize(horizontal: false, vertical: true)
+            .onHover { hovering = $0 }
+            .animation(Theme.Motion.hover, value: hovering)
     }
 
-    static func attributed(_ s: String) -> AttributedString {
+    /// Links are blue; while the pointer is over the text they underline and brighten, so they read as clickable.
+    static func attributed(_ s: String, emphasizeLinks: Bool = false) -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
         var text = (try? AttributedString(markdown: s, options: options)) ?? AttributedString(s)
+        for run in text.runs where run.link != nil {
+            text[run.range].foregroundColor = emphasizeLinks ? Theme.Palette.linkHover : Theme.Palette.link
+            if emphasizeLinks { text[run.range].underlineStyle = .single }
+        }
         for run in text.runs where run.inlinePresentationIntent?.contains(.code) == true {
             text[run.range].font = .system(.callout, design: .monospaced)
             text[run.range].backgroundColor = Color.secondary.opacity(0.15)
@@ -29,12 +39,12 @@ struct MarkdownBlock: View {
     init(_ source: String) { self.source = source }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: Theme.Space.s + 2) {
             ForEach(Array(Self.blocks(source).enumerated()), id: \.offset) { _, block in
                 switch block {
                 case .heading(let t): MD(t).font(.headline).padding(.top, 6)
                 case .bullet(let mark, let t, let indent):
-                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                         Text(mark).foregroundStyle(.secondary)
                         MD(t)
                     }.padding(.leading, CGFloat(indent) * 14)
@@ -80,5 +90,73 @@ struct MarkdownBlock: View {
         }
         if let c = code { out.append(.code(c.joined(separator: "\n"))) }
         return out
+    }
+}
+
+
+/// The sections of an issue written with the house template: Context, Goal, Steps, Watch out, QA, and the rest.
+struct IssueSections {
+    struct Item: Hashable { let text: String; let done: Bool }
+
+    var context: String = ""
+    var goal: String = ""
+    var steps: [Item] = []
+    var watchOut: String = ""
+    var qa: [Item] = []
+    /// Any other section, kept in order: title and raw Markdown.
+    var other: [(title: String, body: String)] = []
+
+    init(_ description: String) {
+        var current = "", lines: [String] = [], folded = false
+        func flush() {
+            let body = lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            defer { lines = [] }
+            guard !body.isEmpty || !current.isEmpty else { return }
+            switch Self.kind(of: current) {
+            case "context": context = [context, body].filter { !$0.isEmpty }.joined(separator: "\n")
+            case "goal": goal = [goal, body].filter { !$0.isEmpty }.joined(separator: "\n")
+            case "steps": steps += Self.items(body)
+            case "watch": watchOut = [watchOut, body].filter { !$0.isEmpty }.joined(separator: "\n")
+            case "qa": qa += Self.items(body)
+            default: if !body.isEmpty { other.append((current, body)) }
+            }
+        }
+        for raw in description.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.hasPrefix("+++") {
+                if folded { folded = false; flush(); current = "" }
+                else { flush(); folded = true; current = line.dropFirst(3).trimmingCharacters(in: .whitespaces) }
+                continue
+            }
+            if !folded, line.hasPrefix("## ") { flush(); current = String(line.dropFirst(3)); continue }
+            lines.append(raw)
+        }
+        flush()
+    }
+
+    /// Headings people actually write, mapped to the template's sections.
+    static func kind(of heading: String) -> String {
+        let h = heading.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: " :"))
+        let map: [String: [String]] = [
+            "context": ["", "context", "background", "problem", "why", "description", "summary"],
+            "goal": ["goal", "goals", "outcome", "objective"],
+            "steps": ["steps", "actions", "plan", "tasks", "to do", "todo", "next steps"],
+            "watch": ["watch out", "gotchas", "risks", "caveats", "notes"],
+            "qa": ["qa", "acceptance criteria", "definition of done", "done when", "how to test", "testing", "test plan"],
+        ]
+        return map.first { $0.value.contains(h) }?.key ?? "other"
+    }
+
+    /// Checklist items from bullets, checkboxes or a numbered list. A plain paragraph line becomes an item too,
+    /// so nothing written under Steps or QA is ever dropped.
+    static func items(_ body: String) -> [Item] {
+        body.components(separatedBy: "\n").compactMap { raw in
+            var line = raw.trimmingCharacters(in: .whitespaces)
+            guard !line.isEmpty else { return nil }
+            if let r = line.range(of: #"^\d+[.)]\s+"#, options: .regularExpression) { line.removeSubrange(r); line = "- " + line }
+            for (prefix, done) in [("- [ ] ", false), ("* [ ] ", false), ("- [x] ", true), ("* [x] ", true), ("- [X] ", true), ("- ", false), ("* ", false)]
+            where line.hasPrefix(prefix) { return Item(text: String(line.dropFirst(prefix.count)), done: done) }
+            return Item(text: line, done: false)
+        }
     }
 }

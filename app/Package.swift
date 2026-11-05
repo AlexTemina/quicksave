@@ -1,10 +1,11 @@
-// swift-tools-version:5.10
+// swift-tools-version:6.0
 import PackageDescription
 
 let package = Package(
     name: "Quicksave",
-    platforms: [.macOS(.v14)],
+    platforms: [.macOS(.v15)],
     targets: [
         .executableTarget(name: "Quicksave", path: "Sources/Quicksave")
-    ]
+    ],
+    swiftLanguageModes: [.v5]
 )

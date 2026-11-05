@@ -2,6 +2,13 @@ import Foundation
 
 struct LinearIssue: Decodable {
     struct State: Decodable { let name: String; let type: String; let color: String? }
+    struct Attachment: Decodable {
+        struct Meta: Decodable { let status: String?; let number: Int?; let draft: Bool? }
+        let url: String
+        let title: String?
+        let metadata: Meta?
+    }
+    struct Attachments: Decodable { let nodes: [Attachment] }
     struct Relation: Decodable { let type: String; let relatedIssue: LinearIssue? ; let issue: LinearIssue? }
     struct Relations: Decodable { let nodes: [Relation] }
     let identifier: String
@@ -10,13 +17,14 @@ struct LinearIssue: Decodable {
     let url: String
     let dueDate: String?
     let state: State
+    let attachments: Attachments?
     let relations: Relations?
     let inverseRelations: Relations?
 }
 
 /// Read-only Linear client. One GraphQL query returns the open Main Quest with its related pieces.
 enum Linear {
-    private static let pieceFields = "identifier title description url dueDate state { name type color }"
+    private static let pieceFields = "identifier title description url dueDate state { name type color } attachments { nodes { url title metadata } }"
 
     struct Board { let quests: [LinearIssue]; let stateColors: [String: String] }
 

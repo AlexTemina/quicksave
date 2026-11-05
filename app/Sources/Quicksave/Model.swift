@@ -25,11 +25,33 @@ enum Column: String, CaseIterable, Identifiable {
     }
 }
 
+struct PullRequest: Hashable {
+    let number: Int
+    let url: URL
+    /// Linear's view of it: "open", "merged", "closed", "draft"… nil when unknown.
+    let status: String?
+
+    /// GitHub PR attachments on a Linear issue, newest number first.
+    static func from(_ issue: LinearIssue) -> [PullRequest] {
+        let re = try! NSRegularExpression(pattern: #"github\.com/[^/]+/[^/]+/pull/(\d+)"#)
+        var out: [PullRequest] = []
+        for a in issue.attachments?.nodes ?? [] {
+            let ns = a.url as NSString
+            guard let m = re.firstMatch(in: a.url, range: NSRange(location: 0, length: ns.length)),
+                  let n = Int(ns.substring(with: m.range(at: 1))), let url = URL(string: a.url) else { continue }
+            let status = a.metadata?.draft == true ? "draft" : a.metadata?.status?.lowercased()
+            if !out.contains(where: { $0.number == n }) { out.append(PullRequest(number: n, url: url, status: status)) }
+        }
+        return out.sorted { $0.number > $1.number }
+    }
+}
+
 struct Piece: Identifiable {
     let id: String
     let title: String
     let stateName: String
     let description: String
+    let pullRequests: [PullRequest]
     let tag: String
     let step: String
     let qa: [String]
@@ -57,7 +79,8 @@ struct MainQuest {
         identifier = issue.identifier
         stateName = issue.state.name
         column = Column.of(issue.state)
-        title = issue.title.replacingOccurrences(of: "Main Quest: ", with: "")
+        let raw = issue.title.replacingOccurrences(of: "Main Quest: ", with: "")
+        title = raw.prefix(1).uppercased() + raw.dropFirst()
         dueDate = issue.dueDate
         url = URL(string: issue.url)
         let lines = (issue.description ?? "").components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
@@ -79,7 +102,7 @@ struct MainQuest {
         pieces = related.filter { seen.insert($0.identifier).inserted }.map { p in
             let plan = planned[p.identifier]
             return Piece(id: p.identifier, title: p.title, stateName: p.state.name,
-                         description: Self.clean(p.description ?? ""), tag: plan?.tag.isEmpty == false ? plan!.tag : p.title,
+                         description: Self.clean(p.description ?? ""), pullRequests: PullRequest.from(p), tag: plan?.tag.isEmpty == false ? plan!.tag : p.title,
                          step: plan?.step ?? "", qa: Self.qa(p.description), url: URL(string: p.url),
                          column: Column.of(p.state), order: plan?.order ?? 99)
         }.sorted { $0.order < $1.order }

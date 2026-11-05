@@ -19,10 +19,17 @@ cat > "$app/Contents/Info.plist" <<PLIST
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1.0</string>
   <key>CFBundleVersion</key><string>1</string>
-  <key>LSMinimumSystemVersion</key><string>14.0</string>
+  <key>LSMinimumSystemVersion</key><string>15.0</string>
 </dict>
 </plist>
 PLIST
-codesign --force --sign - "$app"
+# A stable identity keeps macOS permissions (App Management, Automation) across rebuilds; ad-hoc signing resets them every build.
+identity="${QUICKSAVE_SIGN_IDENTITY:-Hearthian Local Signing}"
+if security find-identity -v -p codesigning | grep -q "\"$identity\""; then
+  codesign --force --sign "$identity" "$app"
+else
+  echo "no '$identity' signing identity, signing ad-hoc (macOS will ask for permissions again after every build)" >&2
+  codesign --force --sign - "$app"
+fi
 [ "${QUICKSAVE_NO_LAUNCH:-}" = 1 ] || open "$app"
 echo "$app"

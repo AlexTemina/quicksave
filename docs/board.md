@@ -8,8 +8,12 @@ What the app shows, and nothing else yet.
 - Top: the Main Quest. A header with its title, "done" sentence, state, pieces done over total and due date; under it, its pieces as cards.
 - Bottom: side quests. What goes there comes from the morning contract, designed later. Empty until then.
 - Each card: the code with its 2-3 word tag, the step it takes, and its `## QA`, folded. A click opens the issue in Linear.
-- The next open piece has a light accent background.
-- Two buttons on each card: open the issue in Linear, and go to its worktree in Orca.
+- Pieces show in their Main Quest order; nothing else marks the next one.
+- Each card: the code, its PRs (live from GitHub: open green, CI failing red, merged purple, draft grey, closed brown), an "Agent" tag when a Claude agent is live in its Orca worktree, the tag and today's step.
+- Two buttons on each card, shown on hover: open the issue in Linear, go to its worktree in Orca.
+- Clicking a card opens its detail, read through the issue template: Context with the Goal, Actions (Steps) and QA as checklists, Watch out, and the rest folded under More. Common heading names (Acceptance criteria, Plan, Background…) map to the same sections.
+- Empty columns collapse to a thin strip; columns with cards share the window's width.
+- Everything clickable reacts on hover.
 
 ## Going to Orca
 
