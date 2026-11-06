@@ -78,7 +78,34 @@ enum Theme {
         static let qa = "checklist"
         static let questComplete = "trophy.fill"
         static let agentLive = "sparkles"
-        static let app = "gamecontroller.fill"
+    }
+
+    /// The app's crystal as pixel art for the menu bar, one point per pixel. The outline keeps it legible on a light bar.
+    enum Crystal {
+        static let pixels = [
+            ".....K.....",
+            "....KWK....",
+            "...KWcDK...",
+            "..KWcCBDK..",
+            ".KWcCCBBVK.",
+            ".KccCCBBVK.",
+            ".KcCCCBBDK.",
+            ".KcCCCBDDK.",
+            ".KcCCBBDDK.",
+            ".KCCCBBDDK.",
+            "..KCCBBDK..",
+            "..KCCBBDK..",
+            "..KCCBBDK..",
+            "...KCBDK...",
+            "...KCBDK...",
+            "....KBK....",
+            "....KBK....",
+            ".....K.....",
+        ]
+        static let colors: [Character: String] = [
+            "K": "#16236b", "W": "#f2fdff", "c": "#8fe9ff", "C": "#3fc4f5",
+            "B": "#2b7df0", "D": "#1f4fc8", "V": "#a79dff",
+        ]
     }
 
     enum Leading {

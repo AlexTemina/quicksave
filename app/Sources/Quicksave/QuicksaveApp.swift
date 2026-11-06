@@ -16,8 +16,9 @@ struct QuicksaveApp: App {
             MenuView(store: store).onAppear { store.start() }
         } label: {
             if let q = store.quest {
-                Label("\(q.doneCount)/\(q.pieces.count)", systemImage: Theme.Icon.mainQuest).labelStyle(.titleAndIcon)
-            } else { Image(systemName: Theme.Icon.app) }
+                Label { Text("\(q.doneCount)/\(q.pieces.count)") } icon: { Image(nsImage: QSCrystalMark.image) }
+                    .labelStyle(.titleAndIcon)
+            } else { Image(nsImage: QSCrystalMark.image) }
         }
         .menuBarExtraStyle(.window)
 

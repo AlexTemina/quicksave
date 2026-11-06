@@ -22,7 +22,11 @@ Orca owns which worktree belongs to which issue (`orca reference find <issue>`).
 1. A linked worktree with a live agent: bring that agent's tab forward.
 2. A linked worktree without one: bring its first open terminal forward, or open a new terminal there.
 3. No linked worktree: the button is off. Creating worktrees or agents is not part of the board.
-- Menu bar: the Main Quest's title and pieces done over total, like `0/2`.
+
+## Menu bar
+
+- The crystal in color and pieces done over total, like `0/2`. Without an open Main Quest, only the crystal.
+- Its menu shows the Main Quest's title, the next piece and pieces done, with buttons for the board, Settings and refresh.
 
 ## How it stays fresh
 

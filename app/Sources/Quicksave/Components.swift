@@ -3,6 +3,27 @@ import SwiftUI
 
 /// Quicksave's design system, layer 2: components. Built only from `Theme` tokens; screens use these, not raw styling.
 
+/// The crystal as a full-color image, sharp on Retina and kept in color by the menu bar.
+enum QSCrystalMark {
+    static let image: NSImage = {
+        let rows = Theme.Crystal.pixels
+        let height = rows.count
+        let width = rows[0].count
+        let image = NSImage(size: NSSize(width: width, height: height), flipped: true) { _ in
+            for (y, row) in rows.enumerated() {
+                for (x, pixel) in row.enumerated() {
+                    guard let hex = Theme.Crystal.colors[pixel] else { continue }
+                    NSColor(Color(hex: hex)).setFill()
+                    NSRect(x: x, y: y, width: 1, height: 1).fill()
+                }
+            }
+            return true
+        }
+        image.isTemplate = false
+        return image
+    }()
+}
+
 struct QSCard<Content: View>: View {
     var highlighted = false
     @ViewBuilder let content: Content
