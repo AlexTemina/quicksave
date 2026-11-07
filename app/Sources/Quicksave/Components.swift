@@ -71,6 +71,38 @@ struct QSHeroCard<Content: View>: View {
     }
 }
 
+/// A card of the inbox's deck. It takes the height its content needs; when the window is too short it keeps its
+/// frame whole, with its rounded corners, and only its content scrolls.
+struct QSDeckCard<Content: View>: View {
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        ViewThatFits(in: .vertical) {
+            shell { inner }
+            shell { ScrollView { inner }.scrollBounceBehavior(.basedOnSize) }
+        }
+    }
+
+    private var inner: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.m) { content }
+            .padding(Theme.Space.l)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func shell<Inner: View>(@ViewBuilder _ inner: () -> Inner) -> some View {
+        let shape = RoundedRectangle(cornerRadius: Theme.Radius.xl)
+        return inner()
+            .clipShape(shape)
+            .background(
+                shape.fill(Theme.Palette.raised)
+                    .overlay(shape.fill(RadialGradient(colors: [Theme.Palette.accent.opacity(0.10), .clear],
+                                                       center: .topLeading, startRadius: 0, endRadius: 420)))
+                    .shadow(color: Theme.Palette.shadow, radius: 10, y: 3)
+            )
+            .overlay(shape.strokeBorder(Theme.Palette.hairline, lineWidth: 0.5))
+    }
+}
+
 /// One segment per piece, in order, each in its Linear state color.
 struct QSProgress: View {
     /// One entry per piece, in order: its state color and whether it is done.
@@ -314,7 +346,157 @@ struct QSWindowBackground: NSViewRepresentable {
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }
 
+/// A keyboard key shown as a small cap, e.g. "←".
+struct QSKeyHint: View {
+    let text: String
+    var body: some View {
+        Text(text).font(Theme.Text.code).foregroundStyle(Theme.Palette.textSecondary)
+            .padding(.horizontal, Theme.Space.xs + 1).padding(.vertical, 1)
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.xs).fill(Color.primary.opacity(0.08)))
+            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.xs).strokeBorder(Theme.Palette.hairline, lineWidth: 0.5))
+    }
+}
+
+/// One of the deck's decisions: icon, name and its key, tinted with its color.
+struct QSDecisionButton: View {
+    let title: String
+    let icon: String
+    let key: String
+    let color: Color
+    var enabled = true
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: Theme.Space.xs + 2) {
+                Image(systemName: icon).font(Theme.Text.cardTitle).frame(height: Theme.Size.decisionIcon)
+                Text(title).font(Theme.Text.micro)
+                QSKeyHint(text: key)
+            }
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity, minHeight: Theme.Size.decisionButton)
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(Theme.Palette.pill(color)))
+            .contentShape(RoundedRectangle(cornerRadius: Theme.Radius.m))
+        }
+        .buttonStyle(QSHoverStyle(padding: 0, backdrop: false))
+        .disabled(!enabled)
+    }
+}
+
+/// The one button that matters on a screen: filled with the accent color. Dim and flat when there is nothing to do.
+struct QSPrimaryButton: View {
+    let title: String
+    let icon: String
+    var busy = false
+    var enabled = true
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Theme.Space.s) {
+                if busy { ProgressView().controlSize(.small).tint(Theme.Palette.onAccent) }
+                else { Image(systemName: icon) }
+                Text(title)
+            }
+            .font(Theme.Text.cardTitle)
+            .foregroundStyle(enabled ? Theme.Palette.onAccent : Theme.Palette.textTertiary)
+            .padding(.horizontal, Theme.Space.l).padding(.vertical, Theme.Space.s + 2)
+            .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(enabled ? Theme.Palette.accent : Theme.Palette.well))
+            .shadow(color: enabled ? Theme.Palette.accent.opacity(0.35) : .clear, radius: 8, y: 2)
+        }
+        .buttonStyle(QSHoverStyle(padding: 0, backdrop: false))
+        .disabled(!enabled)
+    }
+}
+
+/// Bullets of Markdown lines, one per line.
+struct QSBulletList: View {
+    let lines: [String]
+    var secondary = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                    Text("•").foregroundStyle(Theme.Palette.textTertiary)
+                    MD(line).font(Theme.Text.body)
+                        .foregroundStyle(secondary ? Theme.Palette.textSecondary : Theme.Palette.textPrimary)
+                }
+            }
+        }
+    }
+}
+
+/// A quiet one-line notice with an icon.
+struct QSNote: View {
+    let text: String
+    var icon = "info.circle"
+    var warning = false
+    var body: some View {
+        Label(text, systemImage: icon).font(Theme.Text.meta)
+            .foregroundStyle(warning ? Theme.Palette.warning : Theme.Palette.textSecondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// One line of a result: a colored icon, what it is about, what happened, and links to it.
+struct QSResultRow: View {
+    let icon: String
+    let color: Color
+    let title: String
+    let detail: String
+    var links: [URL] = []
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s + 2) {
+            Image(systemName: icon).foregroundStyle(color)
+            VStack(alignment: .leading, spacing: Theme.Space.xs) {
+                HStack(spacing: Theme.Space.s) {
+                    Text(title).font(Theme.Text.code).foregroundStyle(Theme.Palette.textSecondary)
+                    ForEach(links, id: \.self) { url in
+                        Button { NSWorkspace.shared.open(url) } label: { Image(systemName: "arrow.up.right.square") }
+                            .buttonStyle(QSHoverStyle(padding: 1)).help(url.absoluteString)
+                    }
+                }
+                MD(detail).font(Theme.Text.body)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+}
+
+/// A screen with nothing in it, said kindly.
+struct QSEmptyState: View {
+    let icon: String
+    let title: String
+    var subtitle: String?
+    var body: some View {
+        VStack(spacing: Theme.Space.s) {
+            Image(systemName: icon).font(.system(size: 34)).foregroundStyle(Theme.Palette.textTertiary)
+            Text(title).font(Theme.Text.heroTitle)
+            if let subtitle { Text(subtitle).font(Theme.Text.body).foregroundStyle(Theme.Palette.textSecondary) }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(Theme.Space.xl * 2)
+    }
+}
+
 enum QSDate {
+    /// Linear's and GitHub's ISO timestamps, with or without fractions of a second.
+    static func parse(_ iso: String) -> Date? {
+        let fractional = ISO8601DateFormatter()
+        fractional.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return fractional.date(from: iso) ?? ISO8601DateFormatter().date(from: iso)
+    }
+
+    /// "2 days ago", "3 hr. ago".
+    static func ago(_ date: Date) -> String {
+        let f = RelativeDateTimeFormatter()
+        f.locale = Locale(identifier: "en_GB")
+        f.unitsStyle = .short
+        return f.localizedString(for: date, relativeTo: Date())
+    }
+
     /// "Today", "Tomorrow", or "Thu 5 Nov" from Linear's yyyy-MM-dd.
     static func friendly(_ ymd: String) -> String {
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = .current

@@ -23,6 +23,20 @@ final class Database {
         let path = folder.appendingPathComponent("quicksave.sqlite").path
         if sqlite3_open(path, &db) == SQLITE_OK {
             sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value BLOB NOT NULL)", nil, nil, nil)
+            // Decisions about vault pull requests wait here until he presses Apply: a pull request has no state in Linear.
+            sqlite3_exec(db, "CREATE TABLE IF NOT EXISTS inbox_pr_decisions (id TEXT PRIMARY KEY, decision TEXT NOT NULL)", nil, nil, nil)
+            // Text he posts himself somewhere else. See docs/drafts.md.
+            sqlite3_exec(db, """
+                CREATE TABLE IF NOT EXISTS drafts (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT, place TEXT NOT NULL, link TEXT, body TEXT NOT NULL,
+                  source TEXT, created REAL NOT NULL, archived INTEGER NOT NULL DEFAULT 0)
+                """, nil, nil, nil)
+            // Added later: a line saying what to do with the draft. Fails harmlessly when the column already exists.
+            sqlite3_exec(db, "ALTER TABLE drafts ADD COLUMN note TEXT", nil, nil, nil)
+            // 1 once the text has been left as a draft in Slack itself.
+            sqlite3_exec(db, "ALTER TABLE drafts ADD COLUMN drafted INTEGER NOT NULL DEFAULT 0", nil, nil, nil)
+            // The code of the item the draft came from (TEMI-521), so an AI edit can read what is behind it.
+            sqlite3_exec(db, "ALTER TABLE drafts ADD COLUMN item TEXT", nil, nil, nil)
         }
         chmod(path, 0o600)
         let uuid = Self.hardwareUUID() ?? "quicksave-no-hardware-uuid"
@@ -41,6 +55,98 @@ final class Database {
         guard let value, !value.isEmpty else { delete(name); return }
         guard let sealed = try? AES.GCM.seal(Data(value.utf8), using: sealKey).combined else { return }
         put(name, sealed)
+    }
+
+    // MARK: Inbox
+
+    func prDecisions() -> [String: String] {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        var out: [String: String] = [:]
+        guard sqlite3_prepare_v2(db, "SELECT id, decision FROM inbox_pr_decisions", -1, &stmt, nil) == SQLITE_OK else { return out }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            if let id = sqlite3_column_text(stmt, 0), let d = sqlite3_column_text(stmt, 1) { out[String(cString: id)] = String(cString: d) }
+        }
+        return out
+    }
+
+    /// Remembers a decision about a pull request, or forgets it when `decision` is nil.
+    func setPRDecision(_ id: String, _ decision: String?) {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        if let decision {
+            guard sqlite3_prepare_v2(db, "INSERT OR REPLACE INTO inbox_pr_decisions (id, decision) VALUES (?, ?)", -1, &stmt, nil) == SQLITE_OK else { return }
+            sqlite3_bind_text(stmt, 1, id, -1, Self.transient)
+            sqlite3_bind_text(stmt, 2, decision, -1, Self.transient)
+        } else {
+            guard sqlite3_prepare_v2(db, "DELETE FROM inbox_pr_decisions WHERE id = ?", -1, &stmt, nil) == SQLITE_OK else { return }
+            sqlite3_bind_text(stmt, 1, id, -1, Self.transient)
+        }
+        sqlite3_step(stmt)
+    }
+
+    func addDraft(place: String, note: String, link: String?, body: String, source: String?, item: String?) {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "INSERT INTO drafts (place, link, body, source, created, note, item) VALUES (?, ?, ?, ?, ?, ?, ?)", -1, &stmt, nil) == SQLITE_OK else { return }
+        if let item { sqlite3_bind_text(stmt, 7, item, -1, Self.transient) } else { sqlite3_bind_null(stmt, 7) }
+        sqlite3_bind_text(stmt, 1, place, -1, Self.transient)
+        if let link { sqlite3_bind_text(stmt, 2, link, -1, Self.transient) } else { sqlite3_bind_null(stmt, 2) }
+        sqlite3_bind_text(stmt, 3, body, -1, Self.transient)
+        if let source { sqlite3_bind_text(stmt, 4, source, -1, Self.transient) } else { sqlite3_bind_null(stmt, 4) }
+        sqlite3_bind_double(stmt, 5, Date().timeIntervalSince1970)
+        sqlite3_bind_text(stmt, 6, note, -1, Self.transient)
+        sqlite3_step(stmt)
+    }
+
+    /// Open drafts, or the archived ones, newest first.
+    func drafts(archived: Bool) -> [DraftItem] {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        var out: [DraftItem] = []
+        let sql = "SELECT id, place, link, body, source, created, note, drafted, item FROM drafts WHERE archived = ? ORDER BY created DESC"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return out }
+        sqlite3_bind_int(stmt, 1, archived ? 1 : 0)
+        func text(_ i: Int32) -> String? { sqlite3_column_text(stmt, i).map { String(cString: $0) } }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            out.append(DraftItem(id: sqlite3_column_int64(stmt, 0), place: text(1) ?? "Other", note: text(6) ?? "",
+                                 link: text(2).flatMap(URL.init), body: text(3) ?? "", source: text(4) ?? "",
+                                 created: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5)),
+                                 drafted: sqlite3_column_int(stmt, 7) == 1, item: text(8) ?? ""))
+        }
+        return out
+    }
+
+    /// Replaces a draft's text. A text edited after it was left in Slack is no longer the one that is there,
+    /// so it counts as not yet drafted there.
+    func updateDraftBody(_ id: Int64, _ body: String) {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "UPDATE drafts SET body = ?, drafted = 0 WHERE id = ?", -1, &stmt, nil) == SQLITE_OK else { return }
+        sqlite3_bind_text(stmt, 1, body, -1, Self.transient)
+        sqlite3_bind_int64(stmt, 2, id)
+        sqlite3_step(stmt)
+    }
+
+    /// The text now sits as a draft in Slack. The link, when Slack gave one, points at the channel.
+    func markDrafted(_ id: Int64, link: String?) {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "UPDATE drafts SET drafted = 1, link = COALESCE(?, link) WHERE id = ?", -1, &stmt, nil) == SQLITE_OK else { return }
+        if let link { sqlite3_bind_text(stmt, 1, link, -1, Self.transient) } else { sqlite3_bind_null(stmt, 1) }
+        sqlite3_bind_int64(stmt, 2, id)
+        sqlite3_step(stmt)
+    }
+
+    func setDraftsArchived(_ ids: [Int64], _ archived: Bool) {
+        for id in ids {
+            var stmt: OpaquePointer?
+            defer { sqlite3_finalize(stmt) }
+            guard sqlite3_prepare_v2(db, "UPDATE drafts SET archived = ? WHERE id = ?", -1, &stmt, nil) == SQLITE_OK else { continue }
+            sqlite3_bind_int(stmt, 1, archived ? 1 : 0)
+            sqlite3_bind_int64(stmt, 2, id)
+            sqlite3_step(stmt)
+        }
     }
 
     private func get(_ name: String) -> Data? {

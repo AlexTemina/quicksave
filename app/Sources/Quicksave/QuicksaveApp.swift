@@ -6,7 +6,7 @@ struct QuicksaveApp: App {
 
     var body: some Scene {
         Window("Quicksave", id: "main") {
-            BoardView(store: store)
+            RootView(store: store)
                 .frame(minWidth: 860, minHeight: 420)
                 .onAppear { store.start() }
         }

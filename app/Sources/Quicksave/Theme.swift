@@ -13,6 +13,7 @@ enum Theme {
     }
 
     enum Radius {
+        static let xs: CGFloat = 4
         static let s: CGFloat = 6
         static let m: CGFloat = 10
         static let l: CGFloat = 14
@@ -45,6 +46,13 @@ enum Theme {
         static let prMerged = Color(hex: "#8b5cf6")
         static let prClosed = Color(hex: "#a87b6a")
         static let prFailing = Color(hex: "#eb5757")
+        /// The inbox's four decisions, plus leaving a card for later.
+        static let onAccent = Color.white
+        static let decisionAccept = prOpen
+        static let decisionReject = prFailing
+        static let decisionDone = prMerged
+        static let decisionCorrect = Color.accentColor
+        static let decisionLater = Color.secondary
     }
 
     enum Text {
@@ -68,6 +76,12 @@ enum Theme {
         static let popoverWidth: CGFloat = 660
         static let popoverMaxHeight: CGFloat = 780
         static let progressHeight: CGFloat = 6
+        static let deckWidth: CGFloat = 640
+        static let sheetWidth: CGFloat = 620
+        static let sheetMaxHeight: CGFloat = 700
+        static let decisionButton: CGFloat = 78
+        static let decisionIcon: CGFloat = 20
+        static let editorMinHeight: CGFloat = 150
     }
 
     /// Game vocabulary as SF Symbols: the day is played like a game.
@@ -78,6 +92,13 @@ enum Theme {
         static let qa = "checklist"
         static let questComplete = "trophy.fill"
         static let agentLive = "sparkles"
+        static let inbox = "tray.full"
+        static let accept = "checkmark"
+        static let reject = "xmark"
+        static let alreadyDone = "checkmark.seal"
+        static let correct = "pencil"
+        static let later = "clock"
+        static let pullRequest = "arrow.triangle.pull"
     }
 
     /// The app's crystal as pixel art for the menu bar, one point per pixel. The outline keeps it legible on a light bar.

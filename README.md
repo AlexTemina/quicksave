@@ -1,6 +1,6 @@
 # Quicksave
 
-A native macOS app that shows the day, read live from Linear. Linear is the source of truth: the app only reads it and never keeps its own copy of a task's state.
+A native macOS app that shows the day, read live from Linear. Linear is the source of truth: the app never keeps its own copy of a task's state. It reads Linear, and writes to it only from the inbox, when you decide a card.
 
 ## The system
 
@@ -37,10 +37,24 @@ See [Main Quest](docs/main-quest.md) for the full rules.
 - With a linked worktree and no agent, it brings the first open terminal forward, or opens a new one there.
 - With no linked worktree, the button is off.
 
+### Inbox
+
+- A deck of cards with everything waiting for a decision: the auditor's Triage items and the vault's open pull requests. One card at a time, with what happened, what will be done and why.
+- Keys on the left hand: `D` accepts (merges a pull request), `E` accepts with a correction, `A` rejects, `Q` marks it already done, `space` leaves it for later, `⌘Z` undoes.
+- A decision on a Triage card is written to Linear at once. A decision on a pull request waits until Apply.
+- `Apply` (`⌘⇧↩`) merges or closes the pull requests, then starts an agent for the accepted items. Code work is handed to a second agent that runs inside the item's worktree, never pushes, and leaves its summary in the worktree's Orca comment.
+- A panel shows what each item ended in, and the drafts the agents left.
+- The agents run with a short list of allowed actions: they cannot post comments or messages.
+
+### Drafts
+
+- A tab with the text the agents leave for you to post yourself: where it goes, a note on what to do, a copy button and a link to the place.
+- Select the ones already posted and archive them. Archived drafts can be restored.
+
 ### Menu bar and icon
 
 - The menu bar shows the crystal in color and pieces done over total, like `0/2`.
-- Its menu shows the Main Quest's title, the next piece and pieces done, with buttons for the board, Settings and refresh.
+- Its menu shows the Main Quest's title, the next piece and pieces done, how many cards wait in the inbox, and buttons for the board, Settings and refresh.
 - The app has its own crystal icon in pixel art.
 
 ### Staying fresh
@@ -51,10 +65,15 @@ See [Main Quest](docs/main-quest.md) for the full rules.
 
 - The Linear API key is pasted once and stored encrypted in a local database, tied to this Mac.
 
+## Commands
+
+- `/quicksave-main-quest`: proposes the day's Main Quest from the weekly contract and Linear, waits for an ok, and then creates it or moves the open one.
+
 ## Not built yet
 
 - Agent status on cards (Working, Needs you, Done), last reply, summary, sending a message and starting a new agent.
-- `/quicksave-morning`: creating the day's Main Quest and, later, the morning contract that fills Side Quests.
+- A button to run the auditor's sweep from the inbox, and cards for items that came back needing you.
+- The morning contract that fills Side Quests.
 - A "No QA" warning in the detail when an issue does not follow the template. This one is proposed, not decided.
 
 ## Docs
@@ -62,6 +81,9 @@ See [Main Quest](docs/main-quest.md) for the full rules.
 - [Main Quest](docs/main-quest.md): what it is and how it lives in Linear.
 - [Writing in Linear](docs/linear-writing.md): how Quicksave writes what it owns there.
 - [The board](docs/board.md): what the app shows and how it stays fresh.
+- [The inbox](docs/inbox.md): the deck, its decisions, undo and apply.
+- [Drafts](docs/drafts.md): where the text you post yourself lands.
+- [Background agents](docs/background-agents.md): how the app starts agents, with their permissions.
 - [Design system](docs/design-system.md): tokens and components.
 
 ## Development

@@ -273,9 +273,19 @@ struct MenuView: View {
             } else {
                 Text(store.error ?? "No open Main Quest.").font(Theme.Text.body).foregroundStyle(Theme.Palette.textSecondary)
             }
+            if !store.pendingCards.isEmpty {
+                Button {
+                    store.tab = .inbox
+                    openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
+                } label: { Label("Inbox: \(store.pendingCards.count) to decide", systemImage: Theme.Icon.inbox) }
+                    .buttonStyle(QSHoverStyle())
+            }
             Divider()
             HStack {
-                Button("Open board") { openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true) }
+                Button("Open board") {
+                    store.tab = .today
+                    openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
+                }
                     .buttonStyle(QSHoverStyle())
                 Spacer()
                 SettingsLink { Image(systemName: "gearshape") }.buttonStyle(QSHoverStyle())
