@@ -33,4 +33,4 @@ Orca owns which worktree belongs to which issue (`orca reference find <issue>`).
 - A refresh button.
 - A refresh every time Alejandro comes back: the window gets focus, or the menu opens.
 - An automatic refresh every minute, no more often.
-- It only reads Linear, never writes. The personal API key is pasted once in Settings and stored encrypted (AES-GCM, key derived from this Mac's hardware UUID) in a local SQLite database, `~/Library/Application Support/Quicksave/quicksave.sqlite`.
+- The board only reads Linear. The only part of the app that writes is the [inbox](inbox.md). The personal API key is pasted once in Settings and stored encrypted (AES-GCM, key derived from this Mac's hardware UUID) in a local SQLite database, `~/Library/Application Support/Quicksave/quicksave.sqlite`.

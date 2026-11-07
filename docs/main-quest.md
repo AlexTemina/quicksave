@@ -26,6 +26,21 @@ The Main Quest is the minimum Alejandro must get done for the day to be a good d
 - Its QA is the sum of its pieces' `## QA`. The app reads them from the pieces; nothing is copied into the Main Quest, because a copy goes stale.
 - State lives only in Linear. The Main Quest is done when every piece is closed and its QA passes. Then the next one is created.
 
+## How the goal is chosen
+
+`/quicksave-main-quest` proposes and Alejandro corrects. Nothing is written in Linear before his ok. He launches it by hand.
+
+An open Main Quest comes first: in date, nothing is created; past its due date, it proposes continuing with a new date, and he can close or split it instead.
+
+These rules were deduced from his days from 20-oct to 5-nov and are polished with use:
+
+1. Candidates: only the weekly contract's objectives, unless he says otherwise.
+2. Discard what depends on another person today, unless the work is to unblock it.
+3. If yesterday failed, propose continuing, unless it is blocked.
+4. Among what remains: due today or tomorrow or forced by a meeting, then the milestone with the least margin, then the objective untouched for longest, then contract priority.
+5. Fit the goal to the day's real free time, which he is asked about.
+
 ## Open
 
-- How `/quicksave-morning` picks the goal and the pieces, and what it asks Alejandro before creating the issue.
+- Where the weekly contract lives and how it is made, to discuss on Tuesday 10-nov in the afternoon. Until then it is read from the vault, read only.
+- The morning contract that fills Side Quests.
