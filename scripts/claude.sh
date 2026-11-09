@@ -11,4 +11,16 @@ if [ ! -L "$mem" ]; then
   ln -s "$REPO/memory" "$mem"
 fi
 cd "$REPO"
-exec claude "$@"
+# The repo sits under $HOME, so ~/.claude/CLAUDE.md loads as an ancestor file, and the org syncs its plugins into every profile.
+settings=$(cat <<EOF
+{
+  "claudeMdExcludes": ["$HOME/.claude/CLAUDE.md"],
+  "enabledPlugins": {
+    "alan-skills@synced": false,
+    "alan-spain@synced": false,
+    "alan-growth-product@synced": false
+  }
+}
+EOF
+)
+exec claude --settings "$settings" "$@"
