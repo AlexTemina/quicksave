@@ -17,11 +17,12 @@ What the app shows, and nothing else yet.
 
 ## Going to Orca
 
-Orca owns which worktree belongs to which issue (`orca reference find <issue>`). Quicksave never guesses from names or paths.
+Orca owns which worktree belongs to which issue (`orca reference find <issue>`). The one name Quicksave reads is the agent tab's title, which `/start-task` sets to the issue's code (`ES-12867 — …`), as Save Point did.
 
 1. A linked worktree with a live agent: bring that agent's tab forward.
 2. A linked worktree without one: bring its first open terminal forward, or open a new terminal there.
-3. No linked worktree: the button is off. Creating worktrees or agents is not part of the board.
+3. No linked worktree, but an agent tab titled with the issue's code, wherever it runs: bring it forward.
+4. Nothing: the button becomes **Start**. `/start-task` runs in the background from the vault and opens the alan-apps worktree and the agent tab in Orca, which comes forward. When the work needs no worktree (admin, writing, a decision), Quicksave opens the agent itself, in Orca, in the vault, in auto mode, with the tab and the session named `<code> — <tag>` and `/start-task`'s kickoff rules. Either way the next click finds that tab by rule 3.
 
 ## Menu bar
 
@@ -41,3 +42,21 @@ Orca owns which worktree belongs to which issue (`orca reference find <issue>`).
 - They live in the Main Quest's description in Linear, under `## Side quests`, and each one is linked to it as `related`, so Linear shows them next to it. The app tells them from pieces by that section. The board reads them from there with their live state; a closed one is crossed out. The app keeps no list of its own.
 - "Add to today" lists his open issues in that same order, without the Main Quest, its pieces and collectibles, and appends the chosen one to the section and links it. Hovering a side quest shows a button to take it out of the section, which also removes the link. Both read the description fresh from Linear just before writing, so nothing written there meanwhile is lost. The issue itself never changes.
 - **Collectibles** are every open issue of his with the `collectible` label (TEMI), by due date, overdue in red. The label was put on the 13 open `Read:` and `Watch:` issues on 9-nov. The auditor, which files new ones, lives in the vault and does not add it yet.
+
+## Layout and progress
+
+- The board is three things: the Main Quest's board, the side quests' board below it, and the collectibles in a column down the right side, next to both.
+- Side quests are pieces in every way but their place: the same board (one column per Linear state, empty ones shrunk to a strip), the same card (code, due date, pull requests with live CI, the Agent tag, the Linear and Orca buttons, the Actions bar) and the same detail on click. A side quest's card adds a button to take it out of today.
+- On a card, code, due date and badges wrap to a new line when the column is narrow, and the buttons float over the corner on hover, so nothing is squeezed.
+- Quicksave should feel like a game, so finishing things should feel good. Progress bars come first; levels and experience come later.
+  - **Day:** one bar at the top with every piece (gold) and every side quest (green), and "Day cleared" when all are done.
+  - **Main Quest** and **side quests:** a bar each, one segment per issue.
+  - **Each piece:** a small bar with the Actions ticked in its issue.
+  - A done segment fills with a glossy gradient and pops up, the bar bounces when it moves, and a full bar glows.
+
+## Agent status
+
+- Every card shows what its issue's agent is doing, from `orca worktree ps`, read every 8 seconds: **Working** (pulsing), **Needs you** (blocked on a permission or a question, pulsing), **Your turn** (its turn ended), **Error**. An idle or closed agent shows nothing.
+- An issue's agent is one in the worktree linked to it, or any agent whose conversation is named after it (`ES-12867 — …`). With several, the one that needs him most wins, then the most recent.
+- Hovering the tag shows the agent's last reply. The piece's detail shows it in full, with when it last moved.
+- Commands run by the app are read while they run: `orca worktree ps` prints more than a pipe holds, and read only at the end it never finished (9-nov).

@@ -73,6 +73,10 @@ Always denied:
 
 Whether a list entry can be limited to one repository is to be confirmed with a test.
 
+## Start task
+
+`/start-task <issue>` from a card's Start button, run from the vault with a list limited to reading Linear, setting its state, and Orca worktrees and terminals. It never commits, posts or removes. See [the board](board.md).
+
 ## The morning's jobs
 
 Plan, write, games and standup, each with its own lists. See [the morning](morning.md).
