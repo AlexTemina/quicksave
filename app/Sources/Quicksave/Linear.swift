@@ -135,6 +135,104 @@ enum Linear {
         return (env.data?.issues.nodes ?? []).map(\.identifier)
     }
 
+    /// An issue as the queue and the collectibles show it.
+    struct QueueIssue: Decodable, Identifiable, Hashable {
+        struct State: Decodable, Hashable { let name: String; let type: String; let color: String? }
+        struct Named: Decodable, Hashable { let name: String }
+        struct Labels: Decodable, Hashable { let nodes: [Named] }
+        let identifier: String
+        let title: String
+        let url: String
+        let dueDate: String?
+        /// 0 none, 1 urgent, 2 high, 3 medium, 4 low.
+        let priority: Int?
+        let estimate: Double?
+        let state: State
+        let labels: Labels?
+        var id: String { identifier }
+        var isOpen: Bool { !["completed", "canceled"].contains(state.type) && state.name != "Duplicate" }
+        var labelNames: [String] { (labels?.nodes ?? []).map(\.name) }
+    }
+
+    private static let queueFields = "identifier title url dueDate priority estimate state { name type color } labels { nodes { name } }"
+
+    private struct GQLError: Decodable { let message: String }
+
+    /// Issues by their codes, in one request, whatever their state.
+    static func issues(key: String, ids: [String]) async throws -> [QueueIssue] {
+        guard !ids.isEmpty else { return [] }
+        let parts = ids.enumerated().map { i, id in "i\(i): issue(id: \"\(id)\") { \(queueFields) }" }
+        let data = try await send("query { \(parts.joined(separator: "\n")) }", key: key)
+        struct Envelope: Decodable { let data: [String: QueueIssue?]?; let errors: [GQLError]? }
+        let env = try JSONDecoder().decode(Envelope.self, from: data)
+        let found = env.data ?? [:]
+        return ids.indices.compactMap { found["i\($0)"] ?? nil }
+    }
+
+    /// His open issues, every team. With `label`, only those carrying it.
+    static func myOpenIssues(key: String, label: String? = nil) async throws -> [QueueIssue] {
+        let labelFilter = label.map { ", labels: { name: { eq: \"\($0)\" } }" } ?? ""
+        let query = """
+        query { issues(first: 200, filter: {
+          assignee: { isMe: { eq: true } }, state: { type: { nin: ["completed", "canceled"] } }\(labelFilter)
+        }) { nodes { \(queueFields) } } }
+        """
+        let data = try await send(query, key: key)
+        struct Envelope: Decodable {
+            struct DataPart: Decodable { struct Issues: Decodable { let nodes: [QueueIssue] }; let issues: Issues }
+            let data: DataPart?
+            let errors: [GQLError]?
+        }
+        let env = try JSONDecoder().decode(Envelope.self, from: data)
+        if let e = env.errors?.first { throw QuicksaveError.message("Linear: \(e.message)") }
+        return (env.data?.issues.nodes ?? []).filter(\.isOpen)
+    }
+
+    /// An issue's description as Linear holds it right now, read just before rewriting it.
+    static func description(key: String, id: String) async throws -> String {
+        let data = try await send("query { issue(id: \"\(id)\") { description } }", key: key)
+        struct Envelope: Decodable { struct DataPart: Decodable { struct I: Decodable { let description: String? }; let issue: I? }; let data: DataPart? }
+        guard let issue = try JSONDecoder().decode(Envelope.self, from: data).data?.issue else {
+            throw QuicksaveError.message("Linear does not know \(id).")
+        }
+        return issue.description ?? ""
+    }
+
+    struct IssuePreview: Decodable {
+        struct State: Decodable { let name: String; let color: String? }
+        struct Named: Decodable { let name: String }
+        struct Labels: Decodable { let nodes: [Named] }
+        let identifier: String
+        let title: String
+        let description: String?
+        let dueDate: String?
+        let priorityLabel: String?
+        let state: State
+        let assignee: Named?
+        let project: Named?
+        let labels: Labels?
+    }
+
+    /// What a hover card shows of an issue, by its code (ES-12785).
+    static func issuePreview(key: String, id: String) async throws -> IssuePreview? {
+        let query = """
+        query { issue(id: "\(id)") {
+          identifier title description dueDate priorityLabel state { name color } assignee { name } project { name }
+          labels { nodes { name } }
+        } }
+        """
+        let data = try await send(query, key: key)
+        struct Envelope: Decodable {
+            struct DataPart: Decodable { let issue: IssuePreview? }
+            struct GQLError: Decodable { let message: String }
+            let data: DataPart?
+            let errors: [GQLError]?
+        }
+        let env = try JSONDecoder().decode(Envelope.self, from: data)
+        if let e = env.errors?.first { throw QuicksaveError.message("Linear: \(e.message)") }
+        return env.data?.issue
+    }
+
     private static func send(_ query: String, key: String) async throws -> Data {
         var req = URLRequest(url: URL(string: "https://api.linear.app/graphql")!)
         req.httpMethod = "POST"

@@ -5,15 +5,60 @@ struct MD: View {
     let source: String
     init(_ source: String) { self.source = source }
     @State private var hovering = false
+    @State private var hoveredLink: HoveredLink?
+    @State private var rects = LinkRects()
+    @Environment(\.linkPreviewsEnabled) private var previewsEnabled
 
     var body: some View {
         let hasLinks = source.contains("](")
-        Text(Self.attributed(source, emphasizeLinks: hasLinks && hovering))
-            .tint(Theme.Palette.link)
-            .lineSpacing(Theme.Leading.body)
-            .fixedSize(horizontal: false, vertical: true)
-            .onHover { hovering = $0 }
-            .animation(Theme.Motion.hover, value: hovering)
+        let attributed = Self.attributed(source, emphasizeLinks: hasLinks && hovering)
+        if hasLinks && previewsEnabled && Self.hasPreviewableLink(attributed) {
+            // Links Quicksave can read get a hover card: the renderer notes where each one is drawn.
+            Self.text(attributed)
+                .textRenderer(LinkTrackingRenderer(box: rects))
+                .tint(Theme.Palette.link)
+                .lineSpacing(Theme.Leading.body)
+                .fixedSize(horizontal: false, vertical: true)
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let point):
+                        hovering = true
+                        let hit = rects.rects.first { $0.1.insetBy(dx: -1, dy: -2).contains(point) }
+                        let next = hit.map { HoveredLink(target: $0.0, rect: $0.1) }
+                        if next?.target != hoveredLink?.target { hoveredLink = next }
+                    case .ended:
+                        hovering = false
+                        hoveredLink = nil
+                    }
+                }
+                .animation(Theme.Motion.hover, value: hovering)
+                .modifier(LinkPreviewHost(hovered: hoveredLink))
+        } else {
+            Text(attributed)
+                .tint(Theme.Palette.link)
+                .lineSpacing(Theme.Leading.body)
+                .fixedSize(horizontal: false, vertical: true)
+                .onHover { hovering = $0 }
+                .animation(Theme.Motion.hover, value: hovering)
+        }
+    }
+
+    static func hasPreviewableLink(_ text: AttributedString) -> Bool {
+        text.runs.contains { $0.link.flatMap(LinkTarget.init) != nil }
+    }
+
+    /// The same text, built run by run so the links Quicksave can read carry a mark the renderer finds.
+    static func text(_ attributed: AttributedString) -> Text {
+        var out = Text("")
+        for run in attributed.runs {
+            let piece = Text(AttributedString(attributed[run.range]))
+            if let target = run.link.flatMap(LinkTarget.init) {
+                out = out + piece.customAttribute(LinkAttribute(target: target))
+            } else {
+                out = out + piece
+            }
+        }
+        return out
     }
 
     /// Links are blue; while the pointer is over the text they underline and brighten, so they read as clickable.

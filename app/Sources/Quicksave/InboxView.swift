@@ -317,7 +317,7 @@ struct TriageCardView: View {
                     Text(QSDate.ago(created)).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textTertiary)
                 }
                 Spacer()
-                LinearButton(url: item.url, help: "Open \(item.id) in Linear")
+                QSOpenLinkButton(url: item.url, help: "Open \(item.id) in Linear")
             }
             Text(item.title).font(Theme.Text.heroTitle).fixedSize(horizontal: false, vertical: true)
 
@@ -342,14 +342,18 @@ struct TriageCardView: View {
                 }
             }
 
-            if let label = item.sourceLabel, let url = item.sourceURL {
-                Button { NSWorkspace.shared.open(url) } label: {
-                    Label(label, systemImage: "link").lineLimit(1)
+            ForEach(item.others, id: \.self) { section in
+                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                    QSLabel(section.title, icon: section.title.lowercased() == "qa" ? Theme.Icon.qa : "text.alignleft")
+                    MarkdownBlock(section.body).font(Theme.Text.body)
                 }
-                .buttonStyle(QSHoverStyle(padding: 2))
-                .font(Theme.Text.meta)
-                .foregroundStyle(Theme.Palette.link)
-                .help("Open the source")
+            }
+
+            if let source = item.source, !source.isEmpty {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                    Image(systemName: "link").foregroundStyle(Theme.Palette.textTertiary)
+                    MD("**Source:** " + source).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
+                }
             }
         }
     }
@@ -369,7 +373,7 @@ struct PullRequestCardView: View {
                     Text(QSDate.ago(created)).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textTertiary)
                 }
                 Spacer()
-                LinearButton(url: pr.url, help: "Open #\(pr.number) on GitHub")
+                QSOpenLinkButton(url: pr.url, help: "Open #\(pr.number) on GitHub")
             }
             Text(pr.title).font(Theme.Text.heroTitle).fixedSize(horizontal: false, vertical: true)
 

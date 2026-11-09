@@ -220,7 +220,7 @@ struct DraftsView: View {
                             instruction = ""; previousText = nil; aiNote = "" }
                     }
                     if let link = draft.link {
-                        QSIconButton(systemImage: "arrow.up.right.square", help: "Open where it goes") { NSWorkspace.shared.open(link) }
+                        QSOpenLinkButton(url: link, help: "Open where it goes")
                     }
                     Button("Copy") {
                         NSPasteboard.general.clearContents()

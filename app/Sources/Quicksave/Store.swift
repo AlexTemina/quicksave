@@ -14,6 +14,157 @@ final class Store: ObservableObject {
         }
     }()
 
+    // The morning: plan the day, choose the game, write the standup. Kept in memory until he starts over, so closing
+    // the panel loses nothing. See docs/morning.md.
+    @Published var morningOpen = ProcessInfo.processInfo.environment["QUICKSAVE_MORNING"] == "1"
+    @Published var morningComments = ""
+    @Published var morningContinueAnyway = false
+    @Published var morningPlan: MorningPlan?
+    @Published var morningProposing = false
+    @Published var morningApproved = false
+    @Published var morningWriting = false
+    @Published var morningWritten: MorningWriteResult?
+    @Published var morningNotice: String?
+    @Published var gameOptions: [GameOption] = []
+    @Published var gamesLoading = false
+    @Published var gameHistory: [GameEntry] = []
+    @Published var standupWriting = false
+    @Published var standupDone = false
+    @Published var standupNotes = ""
+    @Published var standupSkipped = false
+    private var morningPlanJSON: String?
+    private var morningRounds: [(plan: String, correction: String)] = []
+    private var offeredGames: [String] = []
+    private var morningDay = Morning.today
+
+    var morningBusy: Bool { morningProposing || morningWriting || gamesLoading || standupWriting }
+
+    func openMorning() {
+        if morningDay != Morning.today && !morningBusy { resetMorning() }
+        morningOpen = true
+    }
+
+    func resetMorning() {
+        morningComments = ""; morningContinueAnyway = false; morningPlan = nil; morningPlanJSON = nil; morningRounds = []
+        morningApproved = false; morningWritten = nil; morningNotice = nil; gameOptions = []; offeredGames = []
+        standupDone = false; standupNotes = ""; standupSkipped = false; morningDay = Morning.today
+    }
+
+    func loadGameHistory() {
+        Database.shared.importGamesFromVaultIfEmpty()
+        gameHistory = Database.shared.games()
+    }
+
+    /// Asks for a plan, or for a new one with his correction applied. Nothing is written.
+    func proposePlan(correction: String?) async {
+        guard !morningProposing, !applying else { return }
+        if let correction, let current = morningPlanJSON { morningRounds.append((current, correction)) }
+        morningProposing = true
+        morningNotice = nil
+        defer { morningProposing = false }
+        do {
+            let run = try await Agents.run(.morningPlan(comments: morningComments, rounds: morningRounds))
+            morningPlan = try JSONDecoder().decode(MorningPlan.self, from: Data(run.resultJSON.utf8))
+            morningPlanJSON = run.resultJSON
+        } catch {
+            if correction != nil { morningRounds.removeLast() }
+            morningNotice = "The plan could not be made: \(error.localizedDescription)"
+        }
+    }
+
+    /// He approved: the plan is written to Linear, and the games are looked for at the same time.
+    func approvePlan() async {
+        guard let plan = morningPlan, let json = morningPlanJSON, !morningApproved, !applying else { return }
+        morningApproved = true
+        morningNotice = nil
+        async let games: Void = loadGames()
+        if plan.writes { await writePlan() }
+        await games
+    }
+
+    /// Writes the approved plan to Linear. The agent creates or moves the Main Quest; the side quests are written by
+    /// the app itself, the same way as "Add to today". Called again from "Try again": a part already written is not
+    /// written twice.
+    func writePlan() async {
+        guard let plan = morningPlan, let json = morningPlanJSON, morningApproved, !morningWriting, !applying else { return }
+        morningWriting = true
+        defer { morningWriting = false }
+        var result = morningWritten
+        if plan.action != "keep", result?.mainQuestDone != true {
+            do {
+                let run = try await Agents.run(.morningWrite(plan: json))
+                var decoded = try JSONDecoder().decode(MorningWriteResult.self, from: Data(run.resultJSON.utf8))
+                decoded.mainQuestDone = decoded.outcome == "done"
+                result = decoded
+            } catch {
+                result = MorningWriteResult(outcome: "failed", summary: "It could not be written: \(error.localizedDescription)",
+                                            identifier: nil, url: nil)
+            }
+        } else if result == nil {
+            result = MorningWriteResult(outcome: "done", summary: "The open Main Quest stays as it is.",
+                                        identifier: plan.existing, url: quest?.url?.absoluteString, mainQuestDone: true)
+        }
+        let sides = plan.sideQuests ?? []
+        if result?.mainQuestDone == true, !sides.isEmpty, result?.sideQuestsDone != true,
+           let mq = result?.identifier.flatMap({ $0.isEmpty ? nil : $0 }) ?? plan.existing {
+            do {
+                try await PlanWrites.change(mainQuest: mq) { SideQuestPlan.replacing(sides.map(SideQuestPlan.line), in: $0) }
+                result?.sideQuestsDone = true
+                result?.summary += " \(sides.count) side quest\(sides.count == 1 ? "" : "s") written in the plan."
+            } catch {
+                result?.outcome = "failed"
+                result?.summary += " The side quests could not be written: \(error.localizedDescription)"
+            }
+        }
+        morningWritten = result
+        await refresh()
+    }
+
+    /// Five games for today, never one already used or already offered.
+    func loadGames() async {
+        guard !gamesLoading else { return }
+        gamesLoading = true
+        defer { gamesLoading = false }
+        if gameHistory.isEmpty { loadGameHistory() }
+        let used = gameHistory.map(\.game)
+        let usedKeys = Set(used.map(GameOption.key))
+        var mood = "His comments: \(morningComments.isEmpty ? "none" : morningComments)"
+        if let plan = morningPlan { mood += "\nToday's Main Quest: \(plan.goal). Why: \(plan.why)\nMeetings: \(plan.meetings.joined(separator: "; "))" }
+        do {
+            let run = try await Agents.run(.games(mood: mood, used: used, offered: offeredGames))
+            let fresh = try JSONDecoder().decode(GameOptions.self, from: Data(run.resultJSON.utf8)).games
+                .filter { !usedKeys.contains(GameOption.key($0.game)) && !offeredGames.contains($0.game) }
+            offeredGames += fresh.map(\.game)
+            gameOptions = fresh
+        } catch {
+            morningNotice = "No games came back: \(error.localizedDescription)"
+        }
+    }
+
+    /// Writes the standup with the game he chose, leaves it in Drafts and logs the game so it never repeats.
+    func writeStandup(game: GameOption, score: String) async {
+        guard !standupWriting, let json = morningPlanJSON else { return }
+        standupWriting = true
+        morningNotice = nil
+        defer { standupWriting = false }
+        do {
+            let run = try await Agents.run(.standup(plan: json, comments: morningComments, score: score, game: game))
+            let result = try JSONDecoder().decode(StandupResult.self, from: Data(run.resultJSON.utf8))
+            let thread = result.threadLink.flatMap { $0.isEmpty ? nil : $0 }
+            Database.shared.addDraft(place: "Slack",
+                                     note: "Standup: reply in the thread of today's Spain Area Standup in #area_spain.",
+                                     link: thread, body: result.text, source: "morning",
+                                     item: morningWritten?.identifier ?? morningPlan?.existing)
+            Database.shared.addGame(date: Morning.today, score: score, game: game.game, simile: game.simile, link: game.link)
+            loadDrafts()
+            loadGameHistory()
+            standupNotes = result.notes ?? ""
+            standupDone = true
+        } catch {
+            morningNotice = "The standup could not be written: \(error.localizedDescription)"
+        }
+    }
+
     // Drafts: text he posts himself. They live in the local database.
     @Published var drafts: [DraftItem] = []
     @Published var archivedDrafts: [DraftItem] = []
@@ -98,6 +249,12 @@ final class Store: ObservableObject {
     private var chain: Task<Void, Never>?
 
     @Published var quest: MainQuest?
+    /// Today's side quests, read live from the issues the Main Quest lists.
+    @Published var sideQuests: [SideQuest] = []
+    @Published var collectibles: [Linear.QueueIssue] = []
+    /// Side quests being added or taken out right now.
+    @Published var planWriting: Set<String> = []
+    @Published var planNotice: String?
     @Published var stateColors: [String: String] = [:]
     @Published var worktrees: [String: Orca.Match] = [:]
     @Published var prStatus: [Int: GitHub.Status] = [:]
@@ -141,8 +298,49 @@ final class Store: ObservableObject {
                 if let st = await GitHub.status(of: pr) { statuses[pr.number] = st }
             }
             prStatus = statuses
+            await refreshQueue(key: key)
+            Snapshot.boardIfAsked(self)
         } catch {
             self.error = error.localizedDescription
+        }
+    }
+
+    private func refreshQueue(key: String) async {
+        let plan = quest?.sideQuestPlan ?? []
+        if let issues = try? await Linear.issues(key: key, ids: plan.map(\.id)) {
+            sideQuests = plan.compactMap { line in
+                issues.first { $0.identifier == line.id }.map { SideQuest(issue: $0, note: line.note) }
+            }
+        }
+        if let found = try? await Linear.myOpenIssues(key: key, label: "collectible") { collectibles = QueueOrder.sorted(found) }
+    }
+
+    /// His open issues that could join today: not the Main Quest, its pieces, today's side quests or collectibles.
+    func issuesToAdd() async -> [Linear.QueueIssue] {
+        guard let key = Database.shared.secret("linearApiKey"), let all = try? await Linear.myOpenIssues(key: key) else { return [] }
+        var taken = Set(sideQuests.map(\.id) + (quest?.pieces.map(\.id) ?? []))
+        if let q = quest { taken.insert(q.identifier) }
+        return QueueOrder.sorted(all.filter { !taken.contains($0.identifier) && !$0.labelNames.contains("collectible") })
+    }
+
+    func addToToday(_ issue: Linear.QueueIssue) async {
+        await changePlan(issue.identifier) { SideQuestPlan.adding(issue, to: $0) }
+    }
+
+    func removeFromToday(_ id: String) async {
+        await changePlan(id) { SideQuestPlan.removing(id, from: $0) }
+    }
+
+    private func changePlan(_ id: String, _ edit: @escaping (String) -> String) async {
+        guard let mq = quest?.identifier, !planWriting.contains(id) else { return }
+        planWriting.insert(id)
+        planNotice = nil
+        defer { planWriting.remove(id) }
+        do {
+            try await PlanWrites.change(mainQuest: mq, edit)
+            await refresh()
+        } catch {
+            planNotice = "\(id) could not be changed in the plan: \(error.localizedDescription)"
         }
     }
 
@@ -375,5 +573,6 @@ final class Store: ObservableObject {
         await refreshApprovedCount()
         inboxError = problems.isEmpty ? nil : problems.joined(separator: " ")
         inboxLoaded = true
+        Snapshot.inboxIfAsked(cards)
     }
 }

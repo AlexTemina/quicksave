@@ -1,13 +1,14 @@
 # Quicksave
 
-A native macOS app that shows the day, read live from Linear. Linear is the source of truth: the app never keeps its own copy of a task's state. It reads Linear, and writes to it only from the inbox, when you decide a card.
+A native macOS app that shows the day, read live from Linear. Linear is the source of truth: the app never keeps its own copy of a task's state. It reads Linear, and writes to it only from the inbox, when you decide a card, and from the morning, when you approve the plan.
 
 ## The system
 
 - **Main Quest:** the minimum that makes the day a good day. It has one goal, takes one or two days, and only one is open at a time.
 - **In Linear:** it is a TEMI issue with the `Main Quest` label. Its due date is the planned end, and past that date it has slipped.
 - **Pieces:** the real issues that make up the Main Quest, linked as `related` and done in order, one after another.
-- **Side quests:** work that does not serve the Main Quest's goal. What goes there will come from a morning contract, which is not designed yet.
+- **Side quests:** the other work that fits today, beyond the Main Quest. Only what fits, not everything open. They are part of the plan, so they live in the Main Quest's description in Linear, under `## Side quests`.
+- **Collectibles:** reading and tiny things, no agent and no decision. Issues with the `collectible` label.
 
 See [Main Quest](docs/main-quest.md) for the full rules.
 
@@ -17,7 +18,8 @@ See [Main Quest](docs/main-quest.md) for the full rules.
 
 - A kanban for the Main Quest with one column per Linear state, in Linear's colors. Empty columns collapse to a thin strip.
 - A header with the Main Quest's title, its "done" sentence, its state, pieces done over total, and its due date.
-- A Side Quests area below it, empty until the morning contract exists.
+- Side Quests below it: the side quests the plan lists, each with its state, due date and why it is in today. Closed ones are crossed out. "Add to today" picks one of your open issues, in queue order, and adds it to the plan; hovering one lets you take it out. The issue itself never changes.
+- Collectibles next to them: every open issue of yours with the `collectible` label, by due date, overdue in red.
 
 ### Cards
 
@@ -37,6 +39,15 @@ See [Main Quest](docs/main-quest.md) for the full rules.
 - With a linked worktree and no agent, it brings the first open terminal forward, or opens a new one there.
 - With no linked worktree, the button is off.
 
+### Morning
+
+- A "Start the day" button on the board, big when no Main Quest is open, and in the menu bar. It opens a panel.
+- It warns when the inbox has cards to decide and keeps the plan off until it is clear, with a "Continue anyway".
+- A box for your comments on the day, then an agent proposes the Main Quest and the side quests that fit: goal, done, pieces in order, due date, why, what was left out, meetings and failed sources.
+- Correct it as many times as you want; approving writes it to Linear.
+- Five games for the standup's simile, never one already used, plus your X/5. The log of every game played is in the panel, imported once from the vault.
+- The standup is written with the chosen game and lands in Drafts, linked to today's standup thread.
+
 ### Inbox
 
 - A deck of cards with everything waiting for a decision: the auditor's Triage items and the vault's open pull requests. One card at a time, with what happened, what will be done and why.
@@ -50,6 +61,10 @@ See [Main Quest](docs/main-quest.md) for the full rules.
 
 - A tab with the text the agents leave for you to post yourself: where it goes, a note on what to do, a copy button and a link to the place.
 - Select the ones already posted and archive them. Archived drafts can be restored.
+
+### Hover cards
+
+- Resting the pointer on any link, anywhere in the app, shows a small card. Linear issues and GitHub pull requests show their state, title, key facts and the start of the description; any other page its title and summary. Slack links do not have one yet.
 
 ### Menu bar and icon
 
@@ -67,13 +82,14 @@ See [Main Quest](docs/main-quest.md) for the full rules.
 
 ## Commands
 
-- `/quicksave-main-quest`: proposes the day's Main Quest from the weekly contract and Linear, waits for an ok, and then creates it or moves the open one.
+- `/quicksave-main-quest`: the same plan as the morning panel, from a Claude session. Proposes the day's Main Quest from the weekly contract and Linear, waits for an ok, and then creates it or moves the open one.
 
 ## Not built yet
 
 - Agent status on cards (Working, Needs you, Done), last reply, summary, sending a message and starting a new agent.
+- Hover cards for Slack messages.
+- Typing your own game in the morning instead of choosing one of the five.
 - A button to run the auditor's sweep from the inbox, and cards for items that came back needing you.
-- The morning contract that fills Side Quests.
 - A "No QA" warning in the detail when an issue does not follow the template. This one is proposed, not decided.
 
 ## Docs
@@ -83,6 +99,7 @@ See [Main Quest](docs/main-quest.md) for the full rules.
 - [The board](docs/board.md): what the app shows and how it stays fresh.
 - [The inbox](docs/inbox.md): the deck, its decisions, undo and apply.
 - [Drafts](docs/drafts.md): where the text you post yourself lands.
+- [The morning](docs/morning.md): the panel that plans the day, the game and the standup.
 - [Background agents](docs/background-agents.md): how the app starts agents, with their permissions.
 - [Design system](docs/design-system.md): tokens and components.
 
@@ -90,3 +107,4 @@ See [Main Quest](docs/main-quest.md) for the full rules.
 
 - Start a Claude session on this repo with `scripts/claude.sh`, never with plain `claude`: it uses a clean profile so no outside rules, skills or memory load.
 - `scripts/bundle.sh` builds the app, installs it in `/Applications` and relaunches it.
+- `QUICKSAVE_SNAPSHOT=<folder>` draws every inbox card to a PNG there, without the screen, to check a change when screen capture is not available.

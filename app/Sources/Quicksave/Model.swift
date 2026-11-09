@@ -69,6 +69,8 @@ struct MainQuest {
     let dueDate: String?
     let url: URL?
     let pieces: [Piece]
+    /// Today's side quests, as the description lists them under `## Side quests`.
+    let sideQuestPlan: [SideQuestPlan.Line]
 
     var doneCount: Int { pieces.filter { $0.column == .done }.count }
     var next: Piece? { pieces.sorted { $0.order < $1.order }.first { $0.column != .done } }
@@ -85,6 +87,7 @@ struct MainQuest {
         url = URL(string: issue.url)
         let lines = (issue.description ?? "").components(separatedBy: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
         done = lines.first { !$0.isEmpty } ?? ""
+        sideQuestPlan = SideQuestPlan.parse(issue.description ?? "")
 
         var planned: [String: (order: Int, tag: String, step: String)] = [:]
         let pattern = try! NSRegularExpression(pattern: #"^(\d+)\.\s*\[([A-Z]+-\d+)\s*(?:\(([^)]*)\))?\]\([^)]*\)\s*:?\s*(.*)$"#)
@@ -98,7 +101,8 @@ struct MainQuest {
         var related: [LinearIssue] = []
         for r in issue.relations?.nodes ?? [] where r.type == "related" { if let i = r.relatedIssue { related.append(i) } }
         for r in issue.inverseRelations?.nodes ?? [] where r.type == "related" { if let i = r.issue { related.append(i) } }
-        var seen = Set<String>()
+        // Side quests are related too, so Linear shows them next to the Main Quest; they are not pieces.
+        var seen = Set(sideQuestPlan.map(\.id))
         pieces = related.filter { seen.insert($0.identifier).inserted }.map { p in
             let plan = planned[p.identifier]
             return Piece(id: p.identifier, title: p.title, stateName: p.state.name,

@@ -1,19 +1,24 @@
 import Foundation
 
-/// An item the auditor filed in Triage. Its description follows the auditor's own shape:
-/// a `**Source:**` line, then `## Will do` and `## Why` bullets.
+/// An item the auditor filed in Triage. Its description follows the auditor's own shape: what happened, a
+/// `**Source:**` line, then `## Will do` and `## Why` bullets, and sometimes more sections. Nothing of it is dropped:
+/// what is not "Will do" or "Why" is kept as a section of its own.
 struct TriageItem: Identifiable, Hashable {
+    struct Section: Hashable { let title: String; let body: String }
+
     let id: String
     let title: String
     let url: URL?
-    let sourceLabel: String?
-    let sourceURL: URL?
+    /// Where it came from, as written: plain text, a link, or both.
+    let source: String?
     /// The description as Linear holds it, needed to rewrite its "Will do" when he corrects a card.
     let rawDescription: String
-    /// What happened, in the auditor's own words: the paragraph before "Will do".
+    /// What happened, in the auditor's own words: every line before the first heading, other than the source.
     let intro: [String]
     let willDo: [String]
     let why: [String]
+    /// Any other section (QA, Context, Draft…), in order, as Markdown.
+    let others: [Section]
     let created: Date?
 
     init(_ issue: LinearIssue) {
@@ -23,40 +28,52 @@ struct TriageItem: Identifiable, Hashable {
         created = issue.createdAt.flatMap(QSDate.parse)
         rawDescription = issue.description ?? ""
 
-        var source: (String, URL)?
-        var sections: [String: [String]] = [:]
+        var source: String?
         var loose: [String] = []
+        var order: [String] = []
+        var raw: [String: [String]] = [:]
         var current = ""
-        let link = try! NSRegularExpression(pattern: #"\[([^\]]+)\]\(<?([^)>]+)>?\)"#)
-        for raw in (issue.description ?? "").components(separatedBy: "\n") {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            if line.hasPrefix("## ") { current = line.dropFirst(3).lowercased().trimmingCharacters(in: .whitespaces); continue }
-            guard !line.isEmpty else { continue }
-            if current.isEmpty, line.lowercased().hasPrefix("**source:**") {
-                let ns = line as NSString
-                if let m = link.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)),
-                   let u = URL(string: ns.substring(with: m.range(at: 2))) {
-                    source = (ns.substring(with: m.range(at: 1)), u)
-                }
+        for line in rawDescription.components(separatedBy: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("## ") {
+                current = String(trimmed.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                if raw[current] == nil { order.append(current); raw[current] = [] }
                 continue
             }
-            var text = line
-            for prefix in ["* ", "- "] where text.hasPrefix(prefix) { text = String(text.dropFirst(prefix.count)); break }
-            text = MainQuest.clean(text)
-            if current.isEmpty { loose.append(text) } else { sections[current, default: []].append(text) }
+            if current.isEmpty {
+                guard !trimmed.isEmpty else { continue }
+                if trimmed.lowercased().hasPrefix("**source:**") {
+                    source = MainQuest.clean(String(trimmed.dropFirst("**source:**".count)).trimmingCharacters(in: .whitespaces))
+                } else {
+                    loose.append(MainQuest.clean(trimmed))
+                }
+            } else {
+                raw[current, default: []].append(line)
+            }
         }
-        sourceLabel = source?.0
-        sourceURL = source?.1
-        // The text before "Will do" is what happened. An item without the auditor's headings
-        // still shows what it says as its "Will do", never nothing.
-        if let planned = sections["will do"] {
+        self.source = source
+        func bullets(_ lines: [String]) -> [String] {
+            lines.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }.map { line in
+                var text = line
+                for prefix in ["* ", "- "] where text.hasPrefix(prefix) { text = String(text.dropFirst(prefix.count)); break }
+                return MainQuest.clean(text)
+            }
+        }
+        let willKey = order.first { $0.lowercased() == "will do" }
+        let whyKey = order.first { $0.lowercased() == "why" }
+        // An item without the auditor's headings still shows what it says as its "Will do", never nothing.
+        if let willKey {
             intro = loose
-            willDo = planned
+            willDo = bullets(raw[willKey] ?? [])
         } else {
             intro = []
             willDo = loose.isEmpty ? [title] : loose
         }
-        why = sections["why"] ?? []
+        why = whyKey.map { bullets(raw[$0] ?? []) } ?? []
+        others = order.filter { $0 != willKey && $0 != whyKey }.compactMap { key in
+            let body = (raw[key] ?? []).joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+            return body.isEmpty ? nil : Section(title: key, body: MainQuest.clean(body))
+        }
     }
 }
 

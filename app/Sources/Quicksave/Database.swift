@@ -37,6 +37,12 @@ final class Database {
             sqlite3_exec(db, "ALTER TABLE drafts ADD COLUMN drafted INTEGER NOT NULL DEFAULT 0", nil, nil, nil)
             // The code of the item the draft came from (TEMI-521), so an AI edit can read what is behind it.
             sqlite3_exec(db, "ALTER TABLE drafts ADD COLUMN item TEXT", nil, nil, nil)
+            // The games used in the standup's simile, so none repeats. See docs/morning.md.
+            sqlite3_exec(db, """
+                CREATE TABLE IF NOT EXISTS games (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT NOT NULL, score TEXT NOT NULL, game TEXT NOT NULL,
+                  simile TEXT NOT NULL, link TEXT)
+                """, nil, nil, nil)
         }
         chmod(path, 0o600)
         let uuid = Self.hardwareUUID() ?? "quicksave-no-hardware-uuid"
@@ -146,6 +152,51 @@ final class Database {
             sqlite3_bind_int(stmt, 1, archived ? 1 : 0)
             sqlite3_bind_int64(stmt, 2, id)
             sqlite3_step(stmt)
+        }
+    }
+
+    // MARK: Games
+
+    /// Every game used in a standup, newest first.
+    func games() -> [GameEntry] {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        var out: [GameEntry] = []
+        guard sqlite3_prepare_v2(db, "SELECT id, date, score, game, simile, link FROM games ORDER BY date DESC, id DESC", -1, &stmt, nil) == SQLITE_OK else { return out }
+        func text(_ i: Int32) -> String? { sqlite3_column_text(stmt, i).map { String(cString: $0) } }
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            out.append(GameEntry(id: sqlite3_column_int64(stmt, 0), date: text(1) ?? "", score: text(2) ?? "",
+                                 game: text(3) ?? "", simile: text(4) ?? "", link: text(5).flatMap(URL.init)))
+        }
+        return out
+    }
+
+    func addGame(date: String, score: String, game: String, simile: String, link: String?) {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "INSERT INTO games (date, score, game, simile, link) VALUES (?, ?, ?, ?, ?)", -1, &stmt, nil) == SQLITE_OK else { return }
+        sqlite3_bind_text(stmt, 1, date, -1, Self.transient)
+        sqlite3_bind_text(stmt, 2, score, -1, Self.transient)
+        sqlite3_bind_text(stmt, 3, game, -1, Self.transient)
+        sqlite3_bind_text(stmt, 4, simile, -1, Self.transient)
+        if let link { sqlite3_bind_text(stmt, 5, link, -1, Self.transient) } else { sqlite3_bind_null(stmt, 5) }
+        sqlite3_step(stmt)
+    }
+
+    /// Brings in the vault's log of games once, when the table is still empty. From then on the log lives here.
+    func importGamesFromVaultIfEmpty() {
+        guard games().isEmpty else { return }
+        let path = NSHomeDirectory() + "/vault/Personal/Standup Game Similes.md"
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return }
+        for line in text.components(separatedBy: "\n") where line.hasPrefix("| 20") {
+            let cols = line.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+            guard cols.count >= 5 else { continue }
+            let game = cols[3].replacingOccurrences(of: "**", with: "")
+            var link: String?
+            if cols.count > 5, let r = cols[5].range(of: #"\]\((https?://[^)]+)\)"#, options: .regularExpression) {
+                link = String(cols[5][r].dropFirst(2).dropLast())
+            }
+            addGame(date: cols[1], score: cols[2], game: game, simile: cols[4], link: link)
         }
     }
 

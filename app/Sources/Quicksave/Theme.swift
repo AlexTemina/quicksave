@@ -82,6 +82,11 @@ enum Theme {
         static let decisionButton: CGFloat = 78
         static let decisionIcon: CGFloat = 20
         static let editorMinHeight: CGFloat = 150
+        static let hoverCardWidth: CGFloat = 380
+        static let pickerWidth: CGFloat = 540
+        static let collectiblesWidth: CGFloat = 300
+        static let morningWidth: CGFloat = 720
+        static let morningHeight: CGFloat = 800
     }
 
     /// Game vocabulary as SF Symbols: the day is played like a game.
@@ -99,6 +104,8 @@ enum Theme {
         static let correct = "pencil"
         static let later = "clock"
         static let pullRequest = "arrow.triangle.pull"
+        static let morning = "sunrise.fill"
+        static let collectibles = "diamond.fill"
     }
 
     /// The app's crystal as pixel art for the menu bar, one point per pixel. The outline keeps it legible on a light bar.
@@ -136,5 +143,7 @@ enum Theme {
 
     enum Motion {
         static let hover = Animation.easeOut(duration: 0.15)
+        /// How long the pointer rests on a link before its hover card shows.
+        static let hoverCardDelay = Duration.milliseconds(800)
     }
 }

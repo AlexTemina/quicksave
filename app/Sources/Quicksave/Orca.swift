@@ -70,11 +70,41 @@ enum Orca {
 
     /// Writes to Linear through Orca (`orca linear ...`), which reaches the Alan workspace with the write access
     /// Quicksave's own read-only key does not have. Throws with Orca's own message when Linear refuses.
-    static func linearWrite(_ args: [String]) async throws {
-        let data = try await run(["linear"] + args + ["--json"])
-        struct Env: Decodable { struct E: Decodable { let message: String? }; let ok: Bool?; let error: E? }
-        if let env = try? JSONDecoder().decode(Env.self, from: data), env.ok == false {
-            throw QuicksaveError.message(env.error?.message ?? "Linear refused the change")
+    ///
+    /// A write Orca could not confirm (`linear_write_unconfirmed`) is handled as Orca asks: with a write id it is
+    /// retried once with it; without one, `landed` reads Linear back to tell whether the change is there.
+    static func linearWrite(_ args: [String], landed: (() async -> Bool)? = nil) async throws {
+        struct Env: Decodable {
+            struct E: Decodable { struct D: Decodable { let writeId: String? }; let code: String?; let message: String?; let data: D? }
+            let ok: Bool?; let error: E?
+        }
+        func attempt(_ extra: [String]) async throws -> Env? {
+            let data = try await output(["linear"] + args + extra + ["--json"])
+            return try? JSONDecoder().decode(Env.self, from: data)
+        }
+        var env = try await attempt([])
+        if env?.ok != false { return }
+        if env?.error?.code == "linear_write_unconfirmed" {
+            if let writeId = env?.error?.data?.writeId {
+                env = try await attempt(["--write-id", writeId])
+                if env?.ok != false { return }
+            }
+            if let landed, await landed() { return }
+        }
+        throw QuicksaveError.message(env?.error?.message ?? "Linear refused the change")
+    }
+
+    /// What Orca printed, even when it exits with an error: its JSON says what went wrong.
+    private static func output(_ args: [String]) async throws -> Data {
+        try await withCheckedThrowingContinuation { cont in
+            let p = Process()
+            p.executableURL = URL(fileURLWithPath: binary)
+            p.arguments = args
+            let out = Pipe()
+            p.standardOutput = out
+            p.standardError = Pipe()
+            p.terminationHandler = { _ in cont.resume(returning: out.fileHandleForReading.readDataToEndOfFile()) }
+            do { try p.run() } catch { cont.resume(throwing: error) }
         }
     }
 

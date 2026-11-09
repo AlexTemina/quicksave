@@ -13,29 +13,35 @@ enum InboxWrites {
     static func write(_ decision: InboxDecision, for item: TriageItem) async throws {
         switch decision {
         case .accept:
-            try await Orca.linearWrite(["save-issue", item.id, "--state", "Todo", "--due-date", today()])
+            try await Orca.linearWrite(["save-issue", item.id, "--state", "Todo", "--due-date", today()]) { await isIn(item.id, "Todo") }
         case .correct(let text):
             let file = FileManager.default.temporaryDirectory.appendingPathComponent("quicksave-\(UUID().uuidString).md")
             try rewrittenDescription(item.rawDescription, willDo: text).write(to: file, atomically: true, encoding: .utf8)
             defer { try? FileManager.default.removeItem(at: file) }
             try await Orca.linearWrite(["save-issue", item.id, "--state", "Todo", "--due-date", today(), "--body-file", file.path])
         case .reject:
-            try await Orca.linearWrite(["save-issue", item.id, "--state", "Canceled"])
+            try await Orca.linearWrite(["save-issue", item.id, "--state", "Canceled"]) { await isIn(item.id, "Canceled") }
         case .alreadyDone:
-            try await Orca.linearWrite(["save-issue", item.id, "--state", "Done"])
+            try await Orca.linearWrite(["save-issue", item.id, "--state", "Done"]) { await isIn(item.id, "Done") }
         }
     }
 
     /// Moves an item to a state by its name, e.g. "Done" or "Pending for inputs".
     static func setState(_ id: String, _ state: String) async throws {
-        try await Orca.linearWrite(["save-issue", id, "--state", state])
+        try await Orca.linearWrite(["save-issue", id, "--state", state]) { await isIn(id, state) }
+    }
+
+    /// Reads the state back, for a write Orca could not confirm.
+    static func isIn(_ id: String, _ state: String) async -> Bool {
+        guard let key = Database.shared.secret("linearApiKey") else { return false }
+        return (try? await Linear.issueState(key: key, id: id)) == state
     }
 
     /// Back to Triage. An accepted item also loses the due date it was given; a corrected one keeps his edited text.
     static func undo(_ decision: InboxDecision, for item: TriageItem) async throws {
         var args = ["save-issue", item.id, "--state", "Triage"]
         if decision.needsAgent { args += ["--due-date", "null"] }
-        try await Orca.linearWrite(args)
+        try await Orca.linearWrite(args) { await isIn(item.id, "Triage") }
     }
 
     /// The same description with the lines under `## Will do` replaced by his, one bullet per line.

@@ -12,6 +12,8 @@ struct AgentJob {
     /// JSON Schema of the result the agent must return.
     let schema: String
     let maxTurns: Int
+    /// Folders outside its own it may read, like the vault for the weekly contract.
+    var extraDirectories: [String] = []
 }
 
 struct AgentRun {
@@ -44,6 +46,7 @@ enum Agents {
                            "--allowedTools", job.allowed.joined(separator: ","),
                            "--disallowedTools", job.denied.joined(separator: ","),
                            "--json-schema", job.schema]
+                + job.extraDirectories.flatMap { ["--add-dir", $0] }
             var env = ProcessInfo.processInfo.environment
             env["CLAUDE_CONFIG_DIR"] = nil
             let home = NSHomeDirectory()
@@ -220,6 +223,8 @@ extension AgentJob {
 
             How:
             - Find the channel with the Slack search tools. For a direct message to a person, find the person and use their user id as the channel. For a reply in a thread whose link you have, use thread_ts.
+            - If the note says it is a reply in a thread and you have no link, find the thread: read the channel's recent messages (or search it) for the parent the note names, and use its ts as thread_ts. For the standup, the parent is today's message titled "Spain Area Standup" in #area_spain.
+            - The Slack tools are deferred: find them first with ToolSearch (for example select:mcp__claude_ai_Slack__slack_read_channel), then call them.
             - If you cannot tell which channel, or several are plausible, do not guess: create nothing and return needs_you saying why in one sentence.
             - Slack allows one draft per channel. If it says a draft already exists there (attached_draft_exists), return needs_you with this sentence: "There is already a draft in <channel name>. Delete it in Slack, under Drafts & Sent, and try again." Put the channel's link in `link`.
             - Never send a message and never schedule one. Only create the draft.
@@ -227,8 +232,9 @@ extension AgentJob {
             Return the structured result, written in English: outcome (drafted, needs_you or failed), summary in one sentence, and link with the Slack URL of the channel where the draft is, if you have it.
             """,
             model: "claude-sonnet-5-5",
-            allowed: ["mcp__claude_ai_Slack__slack_send_message_draft", "mcp__claude_ai_Slack__slack_search_channels",
-                      "mcp__claude_ai_Slack__slack_search_users"],
+            allowed: ["ToolSearch", "mcp__claude_ai_Slack__slack_send_message_draft", "mcp__claude_ai_Slack__slack_search_channels",
+                      "mcp__claude_ai_Slack__slack_search_users", "mcp__claude_ai_Slack__slack_read_channel",
+                      "mcp__claude_ai_Slack__slack_read_thread", "mcp__claude_ai_Slack__slack_search_public_and_private"],
             denied: ["mcp__claude_ai_Slack__slack_send_message", "mcp__claude_ai_Slack__slack_schedule_message",
                      "mcp__claude_ai_Gmail__send_message", "mcp__claude_ai_Linear__save_comment", "Bash(rm:*)"],
             schema: """

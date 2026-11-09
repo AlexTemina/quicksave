@@ -12,6 +12,7 @@ struct RootView: View {
             case .drafts: DraftsView(store: store)
             }
         }
+        .sheet(isPresented: $store.morningOpen) { MorningView(store: store) }
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Picker("", selection: $store.tab) {

@@ -219,14 +219,31 @@ struct QSIconButton: View {
     }
 }
 
-/// Opens a Linear issue in the browser.
-struct LinearButton: View {
+/// Every link of the app goes through this button: it opens the URL and, resting on it, shows its hover card.
+/// A link with a card needs no tooltip, the card says more.
+struct QSLinkButton<Label: View>: View {
     let url: URL?
-    var help = "Open in Linear"
+    var help = "Open"
+    var padding: CGFloat = 4
+    var backdrop = true
+    @ViewBuilder let label: Label
+
     var body: some View {
-        QSIconButton(systemImage: "arrow.up.right.square", help: help, enabled: url != nil) {
-            if let url { NSWorkspace.shared.open(url) }
-        }
+        Button { if let url { NSWorkspace.shared.open(url) } } label: { label }
+            .buttonStyle(QSHoverStyle(padding: padding, backdrop: backdrop))
+            .disabled(url == nil)
+            .help(url.flatMap(LinkTarget.init) == nil ? help : "")
+            .linkPreview(url)
+    }
+}
+
+/// The small "open" arrow next to a code or a title.
+struct QSOpenLinkButton: View {
+    let url: URL?
+    var help = "Open"
+    var padding: CGFloat = 4
+    var body: some View {
+        QSLinkButton(url: url, help: help, padding: padding) { Image(systemName: "arrow.up.right.square") }
     }
 }
 
@@ -253,16 +270,9 @@ struct PRBadge: View {
         default: return live?.ci == .failing ? "exclamationmark.triangle.fill" : "arrow.triangle.pull"
         }
     }
-    private var help: String {
-        var parts = ["PR #\(pr.number)", state]
-        if let ci = live?.ci, ci != .none, state == "open" || state == "draft" { parts.append("CI \(ci.rawValue)") }
-        return parts.joined(separator: " · ") + ". Open on GitHub"
-    }
 
     var body: some View {
-        Button { NSWorkspace.shared.open(pr.url) } label: { QSTag(text: "#\(pr.number)", icon: icon, color: color) }
-            .buttonStyle(QSHoverStyle(padding: 0, backdrop: false))
-            .help(help)
+        QSLinkButton(url: pr.url, padding: 0, backdrop: false) { QSTag(text: "#\(pr.number)", icon: icon, color: color) }
     }
 }
 
@@ -454,8 +464,7 @@ struct QSResultRow: View {
                 HStack(spacing: Theme.Space.s) {
                     Text(title).font(Theme.Text.code).foregroundStyle(Theme.Palette.textSecondary)
                     ForEach(links, id: \.self) { url in
-                        Button { NSWorkspace.shared.open(url) } label: { Image(systemName: "arrow.up.right.square") }
-                            .buttonStyle(QSHoverStyle(padding: 1)).help(url.absoluteString)
+                        QSOpenLinkButton(url: url, help: url.absoluteString, padding: 1)
                     }
                 }
                 MD(detail).font(Theme.Text.body)

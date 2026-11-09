@@ -20,6 +20,11 @@ struct BoardView: View {
         HStack(alignment: .firstTextBaseline) {
             Text("Today").font(Theme.Text.pageTitle)
             Spacer()
+            if store.quest != nil {
+                Button { store.openMorning() } label: { Label("Start the day", systemImage: Theme.Icon.morning) }
+                    .buttonStyle(QSHoverStyle())
+                    .help("Plan the day again, choose the game and write the standup")
+            }
             if let last = store.lastRefresh { Text(last, style: .time).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary) }
             QSIconButton(systemImage: "arrow.clockwise", help: "Refresh from Linear", enabled: !store.loading) {
                 Task { await store.refresh() }
@@ -39,16 +44,22 @@ struct BoardView: View {
                     }
                 }
             } else {
-                QSLabel("Main Quest", icon: Theme.Icon.mainQuest, accent: true)
-                Text(store.loading ? "Loading…" : "No open Main Quest.").foregroundStyle(Theme.Palette.textSecondary)
+                QSHeroCard {
+                    QSLabel("Main Quest", icon: Theme.Icon.mainQuest, accent: true)
+                    Text(store.loading ? "Loading…" : "No open Main Quest.").font(Theme.Text.heroTitle)
+                    Text("Plan the day: the Main Quest, the game and the standup.")
+                        .font(Theme.Text.body).foregroundStyle(Theme.Palette.textSecondary)
+                    QSPrimaryButton(title: "Start the day", icon: Theme.Icon.morning) { store.openMorning() }
+                        .padding(.top, Theme.Space.s)
+                }
             }
         }
     }
 
     private var sideBoard: some View {
-        VStack(alignment: .leading, spacing: Theme.Space.m) {
-            QSLabel("Side Quests", icon: Theme.Icon.sideQuests)
-            QSPlaceholder(text: "Side quests will come from the morning contract.")
+        HStack(alignment: .top, spacing: Theme.Space.xl) {
+            SideQuestsSection(store: store).frame(maxWidth: .infinity)
+            CollectiblesSection(store: store).frame(width: Theme.Size.collectiblesWidth)
         }
     }
 
@@ -75,7 +86,7 @@ struct MainQuestHeader: View {
                     Label(QSDate.friendly(due), systemImage: Theme.Icon.due).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
                 }
                 Spacer()
-                LinearButton(url: quest.url, help: "Open \(quest.identifier) in Linear")
+                QSOpenLinkButton(url: quest.url, help: "Open \(quest.identifier) in Linear")
             }
             Text(quest.title).font(Theme.Text.heroTitle)
             MD(quest.done).font(Theme.Text.body).foregroundStyle(Theme.Palette.textSecondary)
@@ -110,7 +121,7 @@ struct PieceCard: View {
                 }
                 Spacer()
                 HStack(spacing: Theme.Space.s) {
-                    LinearButton(url: piece.url)
+                    QSOpenLinkButton(url: piece.url)
                     OrcaButton(worktree: worktree)
                 }
                 .opacity(hovering ? 1 : 0)
@@ -153,7 +164,7 @@ struct PieceDetail: View {
                     QSPill(text: piece.stateName, color: color)
                     ForEach(piece.pullRequests, id: \.number) { PRBadge(pr: $0, live: store.prStatus[$0.number]) }
                     Spacer()
-                    LinearButton(url: piece.url)
+                    QSOpenLinkButton(url: piece.url)
                     OrcaButton(worktree: worktree) { orcaError = $0 }
                 }
                 Text(piece.title).font(Theme.Text.heroTitle).fixedSize(horizontal: false, vertical: true)
@@ -280,6 +291,12 @@ struct MenuView: View {
                 } label: { Label("Inbox: \(store.pendingCards.count) to decide", systemImage: Theme.Icon.inbox) }
                     .buttonStyle(QSHoverStyle())
             }
+            Button {
+                store.tab = .today
+                store.openMorning()
+                openWindow(id: "main"); NSApp.activate(ignoringOtherApps: true)
+            } label: { Label("Start the day", systemImage: Theme.Icon.morning) }
+                .buttonStyle(QSHoverStyle())
             Divider()
             HStack {
                 Button("Open board") {

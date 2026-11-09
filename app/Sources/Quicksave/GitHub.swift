@@ -30,6 +30,39 @@ enum GitHub {
         return Status(state: state, ci: ci)
     }
 
+    struct PRPreview: Decodable {
+        struct Author: Decodable { let login: String }
+        struct Check: Decodable { let conclusion: String?; let status: String?; let state: String? }
+        let number: Int
+        let title: String
+        let state: String
+        let isDraft: Bool
+        let author: Author?
+        let body: String?
+        let additions: Int
+        let deletions: Int
+        let changedFiles: Int
+        let reviewDecision: String?
+        let statusCheckRollup: [Check]?
+        let headRefName: String?
+
+        var ci: CI {
+            let results = (statusCheckRollup ?? []).map { ($0.conclusion ?? $0.state ?? $0.status ?? "").uppercased() }
+            if results.isEmpty { return .none }
+            if results.contains(where: { ["FAILURE", "ERROR", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"].contains($0) }) { return .failing }
+            if results.contains(where: { ["", "IN_PROGRESS", "QUEUED", "PENDING", "WAITING", "EXPECTED"].contains($0) }) { return .running }
+            return .passing
+        }
+    }
+
+    /// What a hover card shows of a pull request.
+    static func prPreview(repo: String, number: Int) async -> PRPreview? {
+        guard let binary else { return nil }
+        let fields = "number,title,state,isDraft,author,body,additions,deletions,changedFiles,reviewDecision,statusCheckRollup,headRefName"
+        guard let data = await run(binary, ["pr", "view", "\(number)", "--repo", repo, "--json", fields]) else { return nil }
+        return try? JSONDecoder().decode(PRPreview.self, from: data)
+    }
+
     /// The second brain, where the auditor opens pull requests for knowledge it wants merged.
     static let vaultRepo = "alan-eu/alextemina-secondbrain"
 
