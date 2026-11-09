@@ -169,6 +169,16 @@ enum Linear {
         return ids.indices.compactMap { found["i\($0)"] ?? nil }
     }
 
+    /// Issues by their codes with everything a piece card shows (description, pull requests), whatever their state.
+    static func pieces(key: String, ids: [String]) async throws -> [LinearIssue] {
+        guard !ids.isEmpty else { return [] }
+        let parts = ids.enumerated().map { i, id in "i\(i): issue(id: \"\(id)\") { \(pieceFields) }" }
+        let data = try await send("query { \(parts.joined(separator: "\n")) }", key: key)
+        struct Envelope: Decodable { let data: [String: LinearIssue?]? }
+        let found = (try JSONDecoder().decode(Envelope.self, from: data)).data ?? [:]
+        return ids.indices.compactMap { found["i\($0)"] ?? nil }
+    }
+
     /// His open issues, every team. With `label`, only those carrying it.
     static func myOpenIssues(key: String, label: String? = nil) async throws -> [QueueIssue] {
         let labelFilter = label.map { ", labels: { name: { eq: \"\($0)\" } }" } ?? ""

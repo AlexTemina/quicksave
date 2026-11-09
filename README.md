@@ -18,14 +18,19 @@ See [Main Quest](docs/main-quest.md) for the full rules.
 
 - A kanban for the Main Quest with one column per Linear state, in Linear's colors. Empty columns collapse to a thin strip.
 - A header with the Main Quest's title, its "done" sentence, its state, pieces done over total, and its due date.
-- Side Quests below it: the side quests the plan lists, each with its state, due date and why it is in today. Closed ones are crossed out. "Add to today" picks one of your open issues, in queue order, and adds it to the plan; hovering one lets you take it out. The issue itself never changes.
-- Collectibles next to them: every open issue of yours with the `collectible` label, by due date, overdue in red.
+- Side Quests below it, on the same kind of board: the side quests the plan lists, each with its state, due date and why it is in today. Closed ones are crossed out. "Add to today" picks one of your open issues, in queue order, and adds it to the plan; hovering one lets you take it out. The issue itself never changes.
+- Collectibles in a column down the right side, next to the Main Quest and the side quests: every open issue of yours with the `collectible` label, by due date, overdue in red.
+
+### Progress
+
+- A Day bar at the top: every piece in gold and every side quest in green, filling as they close, "Day cleared" at the end.
+- A bar for the Main Quest, one for the side quests, and a small one on each piece for the Actions ticked in its issue. Bars bounce when they move and glow when full.
 
 ### Cards
 
 - Each card shows the issue code, its tag and today's step.
 - Each card shows its PRs with live CI: open green, CI failing red, merged purple, draft grey, closed brown.
-- An "Agent" tag appears when a Claude agent is live in the issue's Orca worktree.
+- The issue's agent and what it is doing, read from Orca every few seconds: Working (pulsing), Needs you (it waits for a permission or an answer), Your turn (it finished its turn), Error. Hovering the tag shows its last reply; the detail shows it in full.
 - On hover, one button opens the issue in Linear and another goes to its worktree in Orca.
 
 ### Piece detail
@@ -37,7 +42,8 @@ See [Main Quest](docs/main-quest.md) for the full rules.
 
 - With a live agent, the button brings that agent's tab forward.
 - With a linked worktree and no agent, it brings the first open terminal forward, or opens a new one there.
-- With no linked worktree, the button is off.
+- With no worktree but an agent tab named after the issue, it brings that tab forward.
+- With nothing, the button is Start: `/start-task` runs in the background and opens the worktree and the agent in Orca. Work with no code gets an agent in the vault, in Orca, named after the issue.
 
 ### Morning
 
@@ -86,7 +92,8 @@ See [Main Quest](docs/main-quest.md) for the full rules.
 
 ## Not built yet
 
-- Agent status on cards (Working, Needs you, Done), last reply, summary, sending a message and starting a new agent.
+- Levels and experience: the next step of making the day feel like a game.
+- Sending a message to an agent and its summary, from the card.
 - Hover cards for Slack messages.
 - Typing your own game in the morning instead of choosing one of the five.
 - A button to run the auditor's sweep from the inbox, and cards for items that came back needing you.

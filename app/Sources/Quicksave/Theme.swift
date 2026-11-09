@@ -53,6 +53,13 @@ enum Theme {
         static let decisionDone = prMerged
         static let decisionCorrect = Color.accentColor
         static let decisionLater = Color.secondary
+        /// Quest colors: gold for the Main Quest, green for side quests.
+        static let questMain = Color(hex: "#f5b82e")
+        static let questSide = Color(hex: "#4cb782")
+        /// What an agent is doing.
+        static let agentWorking = Color(hex: "#4cb782")
+        static let agentNeedsYou = Color.orange
+        static let agentDone = Color(hex: "#8b5cf6")
     }
 
     enum Text {
@@ -70,12 +77,14 @@ enum Theme {
     enum Size {
         static let dot: CGFloat = 8
         static let smallDot: CGFloat = 6
-        static let columnMin: CGFloat = 230
+        static let columnMin: CGFloat = 170
         static let columnCollapsed: CGFloat = 34
         static let columnMinHeight: CGFloat = 64
         static let popoverWidth: CGFloat = 660
         static let popoverMaxHeight: CGFloat = 780
-        static let progressHeight: CGFloat = 6
+        static let progressHeight: CGFloat = 10
+        static let dayBarHeight: CGFloat = 14
+        static let miniBarHeight: CGFloat = 5
         static let deckWidth: CGFloat = 640
         static let sheetWidth: CGFloat = 620
         static let sheetMaxHeight: CGFloat = 700
@@ -84,7 +93,7 @@ enum Theme {
         static let editorMinHeight: CGFloat = 150
         static let hoverCardWidth: CGFloat = 380
         static let pickerWidth: CGFloat = 540
-        static let collectiblesWidth: CGFloat = 300
+        static let collectiblesWidth: CGFloat = 250
         static let morningWidth: CGFloat = 720
         static let morningHeight: CGFloat = 800
     }
@@ -143,6 +152,8 @@ enum Theme {
 
     enum Motion {
         static let hover = Animation.easeOut(duration: 0.15)
+        /// A progress bar filling: a little bounce, so finishing something feels good.
+        static let fill = Animation.spring(response: 0.45, dampingFraction: 0.6)
         /// How long the pointer rests on a link before its hover card shows.
         static let hoverCardDelay = Duration.milliseconds(800)
     }

@@ -291,6 +291,51 @@ extension AgentJob {
     }
 }
 
+extension AgentJob {
+    /// /start-task for an issue that has no agent yet, run unattended from the vault: it creates the alan-apps worktree
+    /// and the agent tab named after the issue, in Orca, where he takes over. Not code work: no worktree, and the app
+    /// opens the agent itself.
+    static func startTask(id: String) -> AgentJob {
+        AgentJob(
+            name: "start task \(id)",
+            directory: NSHomeDirectory() + "/vault",
+            prompt: """
+            Run /start-task \(id) as an unattended run started from Quicksave: Alejandro pressed Start on the issue's card.
+
+            Read Claude/commands/start-task.md and follow steps 1 to 5. Differences:
+            - Skip step 5b (the Daily) and step 6 (the report): return the structured result instead.
+            - If the issue is not code work in alan-apps (admin, writing, a decision, a vault task, a review that needs no checkout), create no worktree and open no agent: return no_worktree. Quicksave then opens an agent in the vault itself.
+            - If a worktree already links the issue, reuse it (step 2) and still open the agent of step 4 if none is there.
+            - Never post anything and never commit.
+
+            How to run commands, because you work with a short list of allowed actions:
+            - One simple command per call. No `cd`, no `&&` or `;`, no pipes, no heredocs.
+            - The Linear tools are deferred: find them with ToolSearch first if you need them.
+
+            Return: outcome (created, reused, no_worktree or failed), worktreePath, terminal (the handle `orca terminal create` gave), and summary in one sentence, in English.
+            """,
+            model: "claude-sonnet-5-5",
+            allowed: ["Read", "Grep", "Glob", "ToolSearch", "mcp__claude_ai_Linear__get_issue",
+                      "Bash(orca linear issue:*)", "Bash(orca linear search:*)", "Bash(orca linear status set:*)",
+                      "Bash(orca worktree list:*)", "Bash(orca worktree show:*)", "Bash(orca worktree create:*)", "Bash(orca worktree set:*)",
+                      "Bash(orca terminal list:*)", "Bash(orca terminal create:*)", "Bash(orca terminal wait:*)",
+                      "Bash(orca terminal send:*)", "Bash(orca terminal rename:*)", "Bash(orca terminal switch:*)", "Bash(date:*)"],
+            denied: ["Bash(orca linear comment:*)", "Bash(orca worktree rm:*)", "Bash(git push:*)", "Bash(git commit:*)", "Bash(rm:*)",
+                     "mcp__claude_ai_Linear__save_comment", "mcp__claude_ai_Slack__slack_send_message"],
+            schema: """
+            {"type":"object","properties":{"outcome":{"type":"string","enum":["created","reused","no_worktree","failed"]},"worktreePath":{"type":"string"},"terminal":{"type":"string"},"summary":{"type":"string"}},"required":["outcome","summary"]}
+            """,
+            maxTurns: 40)
+    }
+}
+
+struct StartTaskResult: Decodable {
+    let outcome: String
+    let worktreePath: String?
+    let terminal: String?
+    let summary: String
+}
+
 struct DraftRewriteResult: Decodable {
     let text: String
     let notes: String?

@@ -6,7 +6,7 @@ import SwiftUI
 /// Collectibles are his open issues with the `collectible` label. See docs/board.md.
 
 enum SideQuestPlan {
-    struct Line: Hashable { let id: String; let note: String }
+    struct Line: Hashable { let id: String; var tag: String = ""; let note: String }
 
     static let heading = "## Side quests"
 
@@ -40,7 +40,12 @@ enum SideQuestPlan {
                let colon = t[t.index(after: close)...].firstIndex(of: ":") {
                 note = MainQuest.clean(String(t[t.index(after: colon)...]).trimmingCharacters(in: .whitespaces))
             }
-            out.append(Line(id: id, note: note))
+            // The tag is what sits in the brackets after the code: "[ES-123 (tag)](url)".
+            var tag = ""
+            if let start = t.range(of: id + " ("), let end = t.range(of: ")](", range: start.upperBound..<t.endIndex) {
+                tag = MainQuest.clean(String(t[start.upperBound..<end.lowerBound]))
+            }
+            out.append(Line(id: id, tag: tag, note: note))
         }
         return out
     }
@@ -120,13 +125,6 @@ enum QueueOrder {
     }
 }
 
-struct SideQuest: Identifiable, Hashable {
-    let issue: Linear.QueueIssue
-    let note: String
-    var id: String { issue.identifier }
-    var done: Bool { !issue.isOpen }
-}
-
 /// Writes to the plan: today's side quests. The description is read fresh from Linear just before, so nothing written
 /// there in the meantime is lost. Every side quest is also linked to the Main Quest as related, so Linear shows it
 /// next to it; one taken out of the list loses that link.
@@ -168,8 +166,10 @@ struct SideQuestsSection: View {
             HStack(spacing: Theme.Space.s) {
                 QSLabel("Side Quests", icon: Theme.Icon.sideQuests)
                 if !store.sideQuests.isEmpty {
-                    Text("\(store.sideQuests.filter(\.done).count)/\(store.sideQuests.count)")
-                        .font(Theme.Text.label).foregroundStyle(Theme.Palette.textTertiary)
+                    QSProgress(segments: store.sideQuests.map { (Theme.Palette.questSide, $0.column == .done) })
+                        .frame(maxWidth: 220)
+                    Text("\(store.sideQuests.filter { $0.column == .done }.count) of \(store.sideQuests.count) done")
+                        .font(Theme.Text.number).foregroundStyle(Theme.Palette.textSecondary)
                 }
                 Spacer()
                 if store.quest != nil {
@@ -184,48 +184,11 @@ struct SideQuestsSection: View {
             } else if store.sideQuests.isEmpty {
                 QSPlaceholder(text: "Nothing else today. Add one if something fits.")
             } else {
-                VStack(spacing: Theme.Space.s) {
-                    ForEach(store.sideQuests) { SideQuestRow(quest: $0, store: store) }
+                StateBoard(store: store, items: store.sideQuests, column: \.column) { piece in
+                    PieceCard(piece: piece, store: store) { Task { await store.removeFromToday(piece.id) } }
                 }
             }
         }
-    }
-}
-
-struct SideQuestRow: View {
-    let quest: SideQuest
-    @ObservedObject var store: Store
-    @State private var hovering = false
-
-    var body: some View {
-        let issue = quest.issue
-        QSCard(content: {
-            HStack(spacing: Theme.Space.s) {
-                Text(issue.identifier).font(Theme.Text.code).foregroundStyle(Theme.Palette.textSecondary)
-                QSPill(text: issue.state.name, color: store.color(of: issue.state.name, fallback: issue.state.color ?? "#95a2b3"))
-                if let due = issue.dueDate { QSDue(ymd: due, done: quest.done) }
-                Spacer()
-                HStack(spacing: Theme.Space.s) {
-                    QSOpenLinkButton(url: URL(string: issue.url))
-                    if store.planWriting.contains(issue.identifier) {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        QSIconButton(systemImage: "minus.circle", help: "Take it out of today. The issue itself does not change.") {
-                            Task { await store.removeFromToday(issue.identifier) }
-                        }
-                    }
-                }
-                .opacity(hovering ? 1 : 0)
-                .animation(Theme.Motion.hover, value: hovering)
-            }
-            Text(issue.title).font(Theme.Text.cardTitle)
-                .strikethrough(quest.done, color: Theme.Palette.textTertiary)
-                .foregroundStyle(quest.done ? Theme.Palette.textSecondary : Theme.Palette.textPrimary)
-                .fixedSize(horizontal: false, vertical: true)
-            if !quest.note.isEmpty { MD(quest.note).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary) }
-        }, onHoverChange: { hovering = $0 })
-        .opacity(quest.done ? 0.6 : 1)
-        .linkPreview(URL(string: issue.url))
     }
 }
 
@@ -281,6 +244,8 @@ struct QSDue: View {
         Label(QSDate.friendly(ymd), systemImage: Theme.Icon.due)
             .font(Theme.Text.micro)
             .foregroundStyle(late ? Theme.Palette.prFailing : Theme.Palette.textTertiary)
+            .lineLimit(1)
+            .fixedSize()
     }
 }
 

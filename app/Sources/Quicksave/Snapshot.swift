@@ -12,11 +12,7 @@ enum Snapshot {
     static func boardIfAsked(_ store: Store) {
         guard !boardDone, let folder = ProcessInfo.processInfo.environment["QUICKSAVE_SNAPSHOT"] else { return }
         boardDone = true
-        let view = HStack(alignment: .top, spacing: Theme.Space.xl) {
-            SideQuestsSection(store: store).frame(maxWidth: .infinity)
-            CollectiblesSection(store: store).frame(width: Theme.Size.collectiblesWidth)
-        }
-        write(AnyView(view), width: 960, to: URL(fileURLWithPath: folder).appendingPathComponent("board.png"))
+        write(AnyView(BoardContent(store: store)), width: CGFloat(Double(ProcessInfo.processInfo.environment["QUICKSAVE_SNAPSHOT_WIDTH"] ?? "") ?? 944), to: URL(fileURLWithPath: folder).appendingPathComponent("board.png"))
     }
 
     private static func write(_ view: AnyView, width: CGFloat, to url: URL) {

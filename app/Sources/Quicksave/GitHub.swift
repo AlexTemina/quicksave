@@ -89,35 +89,14 @@ enum GitHub {
     /// Runs a `gh` command that changes something. Returns nil on success, or what `gh` said when it failed.
     static func perform(_ args: [String]) async -> String? {
         guard let binary else { return "The gh command is not installed." }
-        return await withCheckedContinuation { cont in
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: binary)
-            p.arguments = args
-            let out = Pipe(), err = Pipe()
-            p.standardOutput = out
-            p.standardError = err
-            p.terminationHandler = { proc in
-                _ = out.fileHandleForReading.readDataToEndOfFile()
-                let said = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                cont.resume(returning: proc.terminationStatus == 0 ? nil : (said.isEmpty ? "gh failed" : said))
-            }
-            do { try p.run() } catch { cont.resume(returning: error.localizedDescription) }
-        }
+        guard let r = try? await Shell.run(binary, args) else { return "gh could not be started." }
+        if r.status == 0 { return nil }
+        let said = String(data: r.err, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return said.isEmpty ? "gh failed" : said
     }
 
     private static func run(_ binary: String, _ args: [String]) async -> Data? {
-        await withCheckedContinuation { cont in
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: binary)
-            p.arguments = args
-            let out = Pipe()
-            p.standardOutput = out
-            p.standardError = Pipe()
-            p.terminationHandler = { proc in
-                cont.resume(returning: proc.terminationStatus == 0 ? out.fileHandleForReading.readDataToEndOfFile() : nil)
-            }
-            do { try p.run() } catch { cont.resume(returning: nil) }
-        }
+        guard let r = try? await Shell.run(binary, args), r.status == 0 else { return nil }
+        return r.out
     }
 }

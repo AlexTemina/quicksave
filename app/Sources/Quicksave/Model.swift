@@ -15,9 +15,11 @@ enum Column: String, CaseIterable, Identifiable {
         }
     }
 
-    static func of(_ state: LinearIssue.State) -> Column {
-        if let exact = Column(rawValue: state.name) { return exact }
-        switch state.type {
+    static func of(_ state: LinearIssue.State) -> Column { of(name: state.name, type: state.type) }
+
+    static func of(name: String, type: String) -> Column {
+        if let exact = Column(rawValue: name) { return exact }
+        switch type {
         case "completed", "canceled": return .done
         case "started": return .inProgress
         default: return .todo
@@ -58,6 +60,15 @@ struct Piece: Identifiable {
     let url: URL?
     let column: Column
     let order: Int
+    var dueDate: String? = nil
+    /// A side quest: same card and detail as a piece, it just sits below the Main Quest.
+    var isSide = false
+
+    static func from(_ p: LinearIssue, order: Int, tag: String, step: String, isSide: Bool = false) -> Piece {
+        Piece(id: p.identifier, title: p.title, stateName: p.state.name, description: MainQuest.clean(p.description ?? ""),
+              pullRequests: PullRequest.from(p), tag: tag.isEmpty ? p.title : tag, step: step, qa: MainQuest.qa(p.description),
+              url: URL(string: p.url), column: Column.of(p.state), order: order, dueDate: p.dueDate, isSide: isSide)
+    }
 }
 
 struct MainQuest {
@@ -105,10 +116,7 @@ struct MainQuest {
         var seen = Set(sideQuestPlan.map(\.id))
         pieces = related.filter { seen.insert($0.identifier).inserted }.map { p in
             let plan = planned[p.identifier]
-            return Piece(id: p.identifier, title: p.title, stateName: p.state.name,
-                         description: Self.clean(p.description ?? ""), pullRequests: PullRequest.from(p), tag: plan?.tag.isEmpty == false ? plan!.tag : p.title,
-                         step: plan?.step ?? "", qa: Self.qa(p.description), url: URL(string: p.url),
-                         column: Column.of(p.state), order: plan?.order ?? 99)
+            return Piece.from(p, order: plan?.order ?? 99, tag: plan?.tag ?? "", step: plan?.step ?? "")
         }.sorted { $0.order < $1.order }
     }
 

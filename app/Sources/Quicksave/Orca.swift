@@ -25,12 +25,57 @@ enum Orca {
             }
             let result: R
         }
-        guard let env = try? JSONDecoder().decode(Env.self, from: data) else { return nil }
-        let matches = env.result.matches.filter { $0.workspace.archived != true }
-        let pick = matches.first { $0.agents?.contains { $0.liveness == "live" } == true } ?? matches.first
-        guard let pick else { return nil }
-        return Match(worktreeId: pick.workspace.id, name: pick.workspace.name,
-                     liveAgentTerminal: pick.agents?.first { $0.liveness == "live" }?.terminal)
+        let matches = ((try? JSONDecoder().decode(Env.self, from: data))?.result.matches ?? []).filter { $0.workspace.archived != true }
+        if let pick = matches.first(where: { $0.agents?.contains { $0.liveness == "live" } == true }) ?? matches.first {
+            return Match(worktreeId: pick.workspace.id, name: pick.workspace.name,
+                         liveAgentTerminal: pick.agents?.first { $0.liveness == "live" }?.terminal)
+        }
+        // No linked worktree: an agent tab named after the issue still counts, wherever it runs (Save Point's rule).
+        if let t = await namedAgent(issue) {
+            return Match(worktreeId: t.worktreeId, name: (t.worktreePath as NSString).lastPathComponent, liveAgentTerminal: t.handle)
+        }
+        return nil
+    }
+
+    struct Terminal: Decodable {
+        let handle: String
+        let title: String?
+        let connected: Bool?
+        let worktreeId: String
+        let worktreePath: String
+        let agentIdentity: String?
+    }
+
+    /// The agent tab whose title starts with the issue's code, as /start-task names it ("ES-12867 — …").
+    static func namedAgent(_ issue: String) async -> Terminal? {
+        struct Env: Decodable { struct R: Decodable { let terminals: [Terminal] }; let result: R }
+        guard let data = try? await run(["terminal", "list", "--json"]),
+              let all = (try? JSONDecoder().decode(Env.self, from: data))?.result.terminals else { return nil }
+        return all.first { t in
+            guard t.connected != false, t.agentIdentity != nil, let title = t.title else { return false }
+            return title.hasPrefix(issue + " ") || title == issue
+        }
+    }
+
+    /// Opens a new Claude agent in Orca, in auto mode, names its tab after the issue and gives it its first prompt.
+    static func startAgent(in folder: String, title: String, prompt: String) async throws {
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Orca.app"))
+        struct Env: Decodable { struct R: Decodable { struct T: Decodable { let handle: String }; let terminal: T }; let result: R }
+        let created = try await run(["terminal", "create", "--worktree", "path:\(folder)", "--command", "claude --permission-mode auto",
+                                     "--title", title, "--focus", "--json"])
+        guard let handle = (try? JSONDecoder().decode(Env.self, from: created))?.result.terminal.handle else {
+            throw QuicksaveError.message("Orca did not open the agent's terminal.")
+        }
+        _ = try? await run(["terminal", "wait", "--terminal", handle, "--for", "tui-idle", "--timeout-ms", "120000", "--json"])
+        // Claude retitles its tab from the session name, so the session itself is named after the issue too.
+        _ = try? await run(["terminal", "send", "--terminal", handle, "--text", "/rename \(title)", "--enter", "--json"])
+        _ = try? await run(["terminal", "send", "--terminal", handle, "--text", prompt, "--enter", "--json"])
+        _ = try? await run(["terminal", "rename", "--terminal", handle, "--title", title, "--json"])
+    }
+
+    static func focus(terminal handle: String) async {
+        NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Orca.app"))
+        _ = try? await run(["terminal", "switch", "--terminal", handle, "--json"])
     }
 
     static func go(to match: Match) async throws {
@@ -96,38 +141,54 @@ enum Orca {
 
     /// What Orca printed, even when it exits with an error: its JSON says what went wrong.
     private static func output(_ args: [String]) async throws -> Data {
-        try await withCheckedThrowingContinuation { cont in
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: binary)
-            p.arguments = args
-            let out = Pipe()
-            p.standardOutput = out
-            p.standardError = Pipe()
-            p.terminationHandler = { _ in cont.resume(returning: out.fileHandleForReading.readDataToEndOfFile()) }
-            do { try p.run() } catch { cont.resume(throwing: error) }
-        }
+        try await Shell.run(binary, args).out
     }
 
     private static func run(_ args: [String]) async throws -> Data {
-        try await withCheckedThrowingContinuation { cont in
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: binary)
-            p.arguments = args
-            let out = Pipe(), err = Pipe()
-            p.standardOutput = out
-            p.standardError = err
-            p.terminationHandler = { proc in
-                let data = out.fileHandleForReading.readDataToEndOfFile()
-                let problem = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                if proc.terminationStatus == 0 { cont.resume(returning: data) }
-                else {
-                    var message = problem.isEmpty ? (String(data: data, encoding: .utf8) ?? "") : problem
-                    if message.count > 300 { message = String(message.prefix(300)) + "…" }
-                    cont.resume(throwing: QuicksaveError.message(message.isEmpty ? "orca \(args.prefix(2).joined(separator: " ")) failed" : message))
-                }
-            }
-            do { try p.run() } catch { cont.resume(throwing: error) }
+        let r = try await Shell.run(binary, args)
+        if r.status == 0 { return r.out }
+        let problem = String(data: r.err, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        var message = problem.isEmpty ? (String(data: r.out, encoding: .utf8) ?? "") : problem
+        if message.count > 300 { message = String(message.prefix(300)) + "…" }
+        throw QuicksaveError.message(message.isEmpty ? "orca \(args.prefix(2).joined(separator: " ")) failed" : message)
+    }
+
+    /// What an agent is doing, as Orca tracks it. Orca's states: working, blocked (it waits for a permission or an
+    /// answer), done (its turn ended: it waits for him), error, idle.
+    struct AgentState: Equatable {
+        let state: String
+        let name: String
+        let lastMessage: String
+        let updatedAt: Double
+    }
+
+    /// The agent of every issue, from one `orca worktree ps`: the agents of the worktree linked to the issue, and any
+    /// agent whose conversation is named after it ("ES-12867 — …"). With several, the busiest and most recent wins.
+    static func agentStates() async -> [String: AgentState] {
+        guard let data = try? await run(["worktree", "ps", "--json"]),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let worktrees = (obj["result"] as? [String: Any])?["worktrees"] as? [[String: Any]] else { return [:] }
+        let code = try! NSRegularExpression(pattern: #"^([A-Z]+-\d+)\b"#)
+        func issue(in text: String) -> String? {
+            let ns = text as NSString
+            return code.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range(at: 1)) }
         }
+        let rank = ["blocked": 4, "error": 3, "working": 2, "done": 1]
+        var out: [String: AgentState] = [:]
+        for w in worktrees where (w["isArchived"] as? Bool) != true {
+            var linked: String?
+            if let l = w["linkedLinearIssue"] as? String { linked = l }
+            else if let l = w["linkedLinearIssue"] as? [String: Any] { linked = l["identifier"] as? String }
+            for a in w["agents"] as? [[String: Any]] ?? [] where (a["hasLivePty"] as? Bool) != false {
+                let name = (a["conversationName"] as? String) ?? (a["taskTitle"] as? String) ?? (a["displayName"] as? String) ?? ""
+                guard let id = issue(in: name) ?? linked.flatMap({ issue(in: $0) }) else { continue }
+                let state = AgentState(state: a["state"] as? String ?? "idle", name: name,
+                                       lastMessage: a["lastAssistantMessage"] as? String ?? "",
+                                       updatedAt: a["updatedAt"] as? Double ?? 0)
+                if let old = out[id], (rank[old.state] ?? 0, old.updatedAt) >= (rank[state.state] ?? 0, state.updatedAt) { continue }
+                out[id] = state
+            }
+        }
+        return out
     }
 }

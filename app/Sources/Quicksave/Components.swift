@@ -103,14 +103,101 @@ struct QSDeckCard<Content: View>: View {
     }
 }
 
-/// One segment per piece, in order, each in its Linear state color.
+/// Lays its items out in a row and wraps to the next line when they do not fit, like words in a sentence.
+/// Each item keeps its own size: nothing is squeezed.
+struct QSFlow: Layout {
+    var spacing: CGFloat = Theme.Space.s
+    var lineSpacing: CGFloat = Theme.Space.xs
+
+    private func lines(_ subviews: Subviews, width: CGFloat) -> [[(LayoutSubview, CGSize)]] {
+        var out: [[(LayoutSubview, CGSize)]] = [[]]
+        var x: CGFloat = 0
+        for view in subviews {
+            let size = view.sizeThatFits(.unspecified)
+            if x > 0 && x + size.width > width { out.append([]); x = 0 }
+            out[out.count - 1].append((view, size))
+            x += size.width + spacing
+        }
+        return out
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? .infinity
+        let rows = lines(subviews, width: width)
+        var widest: CGFloat = 0
+        var height: CGFloat = 0
+        for (i, row) in rows.enumerated() {
+            var rowWidth: CGFloat = 0
+            var rowHeight: CGFloat = 0
+            for (_, size) in row { rowWidth += size.width; rowHeight = max(rowHeight, size.height) }
+            rowWidth += spacing * CGFloat(max(0, row.count - 1))
+            widest = max(widest, rowWidth)
+            height += rowHeight + (i > 0 ? lineSpacing : 0)
+        }
+        return CGSize(width: min(widest, width), height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for row in lines(subviews, width: bounds.width) {
+            let height = row.map(\.1.height).max() ?? 0
+            var x = bounds.minX
+            for (view, size) in row {
+                view.place(at: CGPoint(x: x, y: y + (height - size.height) / 2), anchor: .topLeading, proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += height + lineSpacing
+        }
+    }
+}
+
+/// A game progress bar: one segment per thing to do. A done segment fills with a glossy gradient and pops up; the
+/// bar springs when it moves and glows once every segment is done. The day should feel good to fill.
 struct QSProgress: View {
-    /// One entry per piece, in order: its state color and whether it is done.
+    /// One entry per thing, in order: its color and whether it is done.
     let segments: [(color: Color, done: Bool)]
+    var height: CGFloat = Theme.Size.progressHeight
+
     var body: some View {
-        HStack(spacing: 3) {
+        let complete = !segments.isEmpty && segments.allSatisfy(\.done)
+        HStack(spacing: max(2, height * 0.3)) {
             ForEach(Array(segments.enumerated()), id: \.offset) { _, seg in
-                Capsule().fill(seg.done ? seg.color : seg.color.opacity(0.28)).frame(height: Theme.Size.progressHeight)
+                Capsule()
+                    .fill(seg.done ? AnyShapeStyle(LinearGradient(colors: [seg.color.opacity(0.75), seg.color], startPoint: .top, endPoint: .bottom))
+                                   : AnyShapeStyle(seg.color.opacity(0.2)))
+                    .frame(height: height)
+                    .overlay(alignment: .top) {
+                        if seg.done {
+                            Capsule().fill(Color.white.opacity(0.4)).frame(height: max(1, height * 0.3))
+                                .padding(.horizontal, height * 0.3).padding(.top, max(1, height * 0.12))
+                        }
+                    }
+                    .scaleEffect(y: seg.done ? 1 : 0.75)
+            }
+        }
+        .shadow(color: complete ? (segments.last?.color ?? Theme.Palette.questMain).opacity(0.6) : .clear, radius: height * 0.7)
+        .animation(Theme.Motion.fill, value: segments.map(\.done))
+    }
+}
+
+/// The day as one bar: the Main Quest's pieces and today's side quests, each in its own color.
+struct QSDayProgress: View {
+    let mainDone: Int
+    let mainTotal: Int
+    let sideDone: Int
+    let sideTotal: Int
+
+    var body: some View {
+        let done = mainDone + sideDone, total = mainTotal + sideTotal
+        HStack(spacing: Theme.Space.m) {
+            QSLabel("Day", icon: "flag.checkered")
+            QSProgress(segments: (0..<mainTotal).map { (Theme.Palette.questMain, $0 < mainDone) }
+                                 + (0..<sideTotal).map { (Theme.Palette.questSide, $0 < sideDone) },
+                       height: Theme.Size.dayBarHeight)
+            if total > 0 && done == total {
+                Label("Day cleared", systemImage: Theme.Icon.questComplete).font(Theme.Text.number).foregroundStyle(Theme.Palette.questMain)
+            } else {
+                Text("\(done)/\(total)").font(Theme.Text.number).foregroundStyle(Theme.Palette.textSecondary)
             }
         }
     }
@@ -276,17 +363,54 @@ struct PRBadge: View {
     }
 }
 
-/// Jumps to the issue's worktree in Orca; off when Orca links none.
+/// What the issue's agent is doing, as a tag: Working pulses, Needs you asks for him, Your turn says it finished.
+struct QSAgentTag: View {
+    let agent: Orca.AgentState
+
+    private var look: (text: String, icon: String, color: Color)? {
+        switch agent.state {
+        case "working": return ("Working", Theme.Icon.agentLive, Theme.Palette.agentWorking)
+        case "blocked": return ("Needs you", "hand.raised.fill", Theme.Palette.agentNeedsYou)
+        case "done": return ("Your turn", "checkmark.bubble.fill", Theme.Palette.agentDone)
+        case "error": return ("Error", "exclamationmark.octagon.fill", Theme.Palette.prFailing)
+        default: return nil
+        }
+    }
+
+    var body: some View {
+        if let look {
+            Label(look.text, systemImage: look.icon)
+                .font(Theme.Text.micro)
+                .foregroundStyle(look.color)
+                .symbolEffect(.pulse, isActive: agent.state == "working" || agent.state == "blocked")
+                .padding(.horizontal, Theme.Space.s - 2).padding(.vertical, 2)
+                .background(Capsule().fill(Theme.Palette.pill(look.color)))
+                .fixedSize()
+                .help(agent.lastMessage.isEmpty ? agent.name : String(agent.lastMessage.prefix(400)))
+        }
+    }
+}
+
+/// Jumps to the issue's agent or worktree in Orca. With neither, it starts one (`onStart`); while that runs it spins.
 struct OrcaButton: View {
     let worktree: Orca.Match?
+    var starting = false
+    var onStart: (() -> Void)? = nil
     var onError: (String) -> Void = { _ in }
     var body: some View {
-        QSIconButton(systemImage: "terminal",
-                     help: worktree.map { "Go to \($0.name) in Orca" + ($0.liveAgentTerminal != nil ? " (agent live)" : "") }
-                         ?? "No Orca worktree for this issue",
-                     enabled: worktree != nil) {
-            guard let worktree else { return }
-            Task { do { try await Orca.go(to: worktree) } catch { onError(error.localizedDescription) } }
+        if starting {
+            ProgressView().controlSize(.small).help("Starting: a worktree and an agent in Orca…")
+        } else if let worktree {
+            QSIconButton(systemImage: "terminal",
+                         help: "Go to \(worktree.name) in Orca" + (worktree.liveAgentTerminal != nil ? " (agent live)" : "")) {
+                Task { do { try await Orca.go(to: worktree) } catch { onError(error.localizedDescription) } }
+            }
+        } else if let onStart {
+            QSIconButton(systemImage: "play.circle",
+                         help: "Start: /start-task opens a worktree and an agent in Orca. Work with no code gets an agent in the vault.",
+                         action: onStart)
+        } else {
+            QSIconButton(systemImage: "terminal", help: "No Orca worktree for this issue", enabled: false) {}
         }
     }
 }

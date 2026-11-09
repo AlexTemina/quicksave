@@ -5,15 +5,35 @@ struct BoardView: View {
 
     var body: some View {
         ScrollView {
+            BoardContent(store: store).padding(Theme.Space.xl)
+        }
+        .background(QSWindowBackground().ignoresSafeArea())
+    }
+}
+
+/// The board without its scroll view, so it can also be drawn to an image.
+struct BoardContent: View {
+    @ObservedObject var store: Store
+
+    var body: some View {
             VStack(alignment: .leading, spacing: Theme.Space.xl + 4) {
                 header
                 if let error = store.error { QSBanner(text: error) }
-                mainQuestBoard
-                sideBoard
+                if let notice = store.agentNotice { QSNote(text: notice, icon: "exclamationmark.triangle", warning: true) }
+                if let quest = store.quest {
+                    QSDayProgress(mainDone: quest.doneCount, mainTotal: quest.pieces.count,
+                                  sideDone: store.sideQuests.filter { $0.column == .done }.count, sideTotal: store.sideQuests.count)
+                }
+                // Collectibles run down the side, next to both the Main Quest and the side quests.
+                HStack(alignment: .top, spacing: Theme.Space.xl) {
+                    VStack(alignment: .leading, spacing: Theme.Space.xl + 4) {
+                        mainQuestBoard
+                        SideQuestsSection(store: store)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    CollectiblesSection(store: store).frame(width: Theme.Size.collectiblesWidth)
+                }
             }
-            .padding(Theme.Space.xl)
-        }
-        .background(QSWindowBackground().ignoresSafeArea())
     }
 
     private var header: some View {
@@ -37,11 +57,7 @@ struct BoardView: View {
             if let quest = store.quest {
                 QSHeroCard {
                     MainQuestHeader(quest: quest, store: store)
-                    columns(count: { c in quest.pieces.filter { $0.column == c }.count }) { column in
-                        ForEach(quest.pieces.filter { $0.column == column }) { piece in
-                            PieceCard(piece: piece, store: store)
-                        }
-                    }
+                    StateBoard(store: store, items: quest.pieces, column: \.column) { PieceCard(piece: $0, store: store) }
                 }
             } else {
                 QSHeroCard {
@@ -56,19 +72,24 @@ struct BoardView: View {
         }
     }
 
-    private var sideBoard: some View {
-        HStack(alignment: .top, spacing: Theme.Space.xl) {
-            SideQuestsSection(store: store).frame(maxWidth: .infinity)
-            CollectiblesSection(store: store).frame(width: Theme.Size.collectiblesWidth)
-        }
-    }
+}
 
-    /// Columns with cards share the width; empty ones shrink to a narrow strip.
-    private func columns<Content: View>(count: @escaping (Column) -> Int, @ViewBuilder _ content: @escaping (Column) -> Content) -> some View {
+/// One column per Linear state, in Linear's colors; empty columns shrink to a narrow strip. The Main Quest's pieces
+/// and the side quests use the same board.
+struct StateBoard<Item: Identifiable, Card: View>: View {
+    @ObservedObject var store: Store
+    let items: [Item]
+    let column: (Item) -> Column
+    @ViewBuilder let card: (Item) -> Card
+
+    var body: some View {
         HStack(alignment: .top, spacing: Theme.Space.m) {
-            ForEach(Column.allCases) { column in
-                QSColumn(title: column.rawValue, color: store.color(of: column.rawValue, fallback: column.fallbackHex),
-                         count: count(column), isEmpty: count(column) == 0) { content(column) }
+            ForEach(Column.allCases) { c in
+                let inColumn = items.filter { column($0) == c }
+                QSColumn(title: c.rawValue, color: store.color(of: c.rawValue, fallback: c.fallbackHex),
+                         count: inColumn.count, isEmpty: inColumn.isEmpty) {
+                    ForEach(inColumn) { card($0) }
+                }
             }
         }
     }
@@ -104,36 +125,64 @@ struct MainQuestHeader: View {
     }
 }
 
+/// The card of a piece or a side quest: they are the same thing, only where they sit changes.
 struct PieceCard: View {
     let piece: Piece
     @ObservedObject var store: Store
+    /// Side quests can be taken out of today from the card.
+    var onRemove: (() -> Void)? = nil
     @State private var showDetail = false
     @State private var hovering = false
 
     var body: some View {
         let worktree = store.worktrees[piece.id]
         QSCard(content: {
-            HStack(spacing: Theme.Space.s + 2) {
-                Text(piece.id).font(Theme.Text.code).foregroundStyle(Theme.Palette.textSecondary)
-                ForEach(piece.pullRequests, id: \.number) { PRBadge(pr: $0, live: store.prStatus[$0.number]) }
-                if worktree?.liveAgentTerminal != nil {
-                    QSTag(text: "Agent", icon: Theme.Icon.agentLive, color: .green).help("A Claude agent is live in this issue's Orca worktree")
+            // Code, date and badges wrap to a new line in a narrow column instead of being squeezed.
+            QSFlow {
+                Text(piece.id).font(Theme.Text.code).foregroundStyle(Theme.Palette.textSecondary).fixedSize()
+                if let due = piece.dueDate { QSDue(ymd: due, done: piece.column == .done) }
+                ForEach(piece.pullRequests, id: \.number) { PRBadge(pr: $0, live: store.prStatus[$0.number]).fixedSize() }
+                if let agent = store.agentStates[piece.id] {
+                    QSAgentTag(agent: agent)
+                } else if worktree?.liveAgentTerminal != nil {
+                    QSTag(text: "Agent", icon: Theme.Icon.agentLive, color: .green).fixedSize()
+                        .help("A Claude agent is live in this issue's Orca worktree")
                 }
-                Spacer()
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            // The actions float over the corner on hover, so they take no room from the badges.
+            .overlay(alignment: .topTrailing) {
                 HStack(spacing: Theme.Space.s) {
                     QSOpenLinkButton(url: piece.url)
-                    OrcaButton(worktree: worktree)
+                    OrcaButton(worktree: worktree, starting: store.startingAgents.contains(piece.id),
+                               onStart: { Task { await store.startAgent(piece) } })
+                    if let onRemove {
+                        if store.planWriting.contains(piece.id) { ProgressView().controlSize(.small) }
+                        else { QSIconButton(systemImage: "minus.circle", help: "Take it out of today. The issue itself does not change.", action: onRemove) }
+                    }
                 }
+                .padding(.horizontal, Theme.Space.xs)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.s).fill(Theme.Palette.surface))
                 .opacity(hovering ? 1 : 0)
+                .allowsHitTesting(hovering)
                 .animation(Theme.Motion.hover, value: hovering)
+                .offset(y: -2)
             }
             Text(piece.tag).font(Theme.Text.cardTitle).fixedSize(horizontal: false, vertical: true)
             if !piece.step.isEmpty { MD(piece.step).font(Theme.Text.body) }
+            let steps = IssueSections(piece.description).steps
+            if !steps.isEmpty {
+                HStack(spacing: Theme.Space.s) {
+                    QSProgress(segments: steps.map { (Theme.Palette.questMain, $0.done) }, height: Theme.Size.miniBarHeight)
+                    Text("\(steps.filter(\.done).count)/\(steps.count)").font(Theme.Text.micro).foregroundStyle(Theme.Palette.textTertiary)
+                }
+                .help("Actions done in the issue")
+            }
         }, onHoverChange: { hovering = $0 })
         .onTapGesture { showDetail = true }
         .popover(isPresented: $showDetail, arrowEdge: .bottom) {
             ScrollView {
-                PieceDetail(index: (store.quest?.pieces.firstIndex { $0.id == piece.id } ?? 0) + 1, piece: piece,
+                PieceDetail(index: ((piece.isSide ? store.sideQuests : store.quest?.pieces ?? []).firstIndex { $0.id == piece.id } ?? 0) + 1, piece: piece,
                             color: store.color(of: piece.stateName, fallback: piece.column.fallbackHex), worktree: worktree,
                             store: store)
             }
@@ -165,13 +214,33 @@ struct PieceDetail: View {
                     ForEach(piece.pullRequests, id: \.number) { PRBadge(pr: $0, live: store.prStatus[$0.number]) }
                     Spacer()
                     QSOpenLinkButton(url: piece.url)
-                    OrcaButton(worktree: worktree) { orcaError = $0 }
+                    OrcaButton(worktree: worktree, starting: store.startingAgents.contains(piece.id),
+                               onStart: { Task { await store.startAgent(piece) } }, onError: { orcaError = $0 })
                 }
                 Text(piece.title).font(Theme.Text.heroTitle).fixedSize(horizontal: false, vertical: true)
+                if let agent = store.agentStates[piece.id] {
+                    VStack(alignment: .leading, spacing: Theme.Space.s) {
+                        HStack(spacing: Theme.Space.s) {
+                            QSLabel("Agent", icon: Theme.Icon.agentLive)
+                            QSAgentTag(agent: agent)
+                            if agent.updatedAt > 0 {
+                                Text(QSDate.ago(Date(timeIntervalSince1970: agent.updatedAt / 1000)))
+                                    .font(Theme.Text.meta).foregroundStyle(Theme.Palette.textTertiary)
+                            }
+                        }
+                        if !agent.lastMessage.isEmpty {
+                            MarkdownBlock(String(agent.lastMessage.prefix(900))).font(Theme.Text.meta)
+                                .foregroundStyle(Theme.Palette.textSecondary)
+                        }
+                    }
+                    .padding(Theme.Space.m)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(Theme.Palette.well))
+                }
                 if !piece.step.isEmpty {
                     HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                         Image(systemName: Theme.Icon.mainQuest).foregroundStyle(Theme.Palette.accent)
-                        MD("Today, step \(index): " + piece.step).font(Theme.Text.body)
+                        MD((piece.isSide ? "Today, side quest: " : "Today, step \(index): ") + piece.step).font(Theme.Text.body)
                     }
                 }
             }
