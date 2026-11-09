@@ -73,6 +73,10 @@ Always denied:
 
 Whether a list entry can be limited to one repository is to be confirmed with a test.
 
+## The morning's jobs
+
+Plan, write, games and standup, each with its own lists. See [the morning](morning.md).
+
 ## Open
 
 - The "Other" family: about 87 items, a good part of them tasks for him and the auditor's own failure alerts. Settled in the [inbox](inbox.md): the card is a notice and goes to Done, and accepting a card approves what it names, closing issues included.

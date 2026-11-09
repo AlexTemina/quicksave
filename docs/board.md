@@ -33,4 +33,11 @@ Orca owns which worktree belongs to which issue (`orca reference find <issue>`).
 - A refresh button.
 - A refresh every time Alejandro comes back: the window gets focus, or the menu opens.
 - An automatic refresh every minute, no more often.
-- The board only reads Linear. The only part of the app that writes is the [inbox](inbox.md). The personal API key is pasted once in Settings and stored encrypted (AES-GCM, key derived from this Mac's hardware UUID) in a local SQLite database, `~/Library/Application Support/Quicksave/quicksave.sqlite`.
+- The board only reads Linear. The parts of the app that write are the [inbox](inbox.md) and the [morning](morning.md). The personal API key is pasted once in Settings and stored encrypted (AES-GCM, key derived from this Mac's hardware UUID) in a local SQLite database, `~/Library/Application Support/Quicksave/quicksave.sqlite`.
+
+## Side quests and collectibles
+
+- **Side quests** are what fits today beyond the Main Quest, never everything open. The morning plan proposes them with the free time left after meetings and the Main Quest, in the 16-oct order: breaking now, due today or overdue, any date before none and sooner first, Linear priority, then size, small first. He corrects and approves them with the plan.
+- They live in the Main Quest's description in Linear, under `## Side quests`, and each one is linked to it as `related`, so Linear shows them next to it. The app tells them from pieces by that section. The board reads them from there with their live state; a closed one is crossed out. The app keeps no list of its own.
+- "Add to today" lists his open issues in that same order, without the Main Quest, its pieces and collectibles, and appends the chosen one to the section and links it. Hovering a side quest shows a button to take it out of the section, which also removes the link. Both read the description fresh from Linear just before writing, so nothing written there meanwhile is lost. The issue itself never changes.
+- **Collectibles** are every open issue of his with the `collectible` label (TEMI), by due date, overdue in red. The label was put on the 13 open `Read:` and `Watch:` issues on 9-nov. The auditor, which files new ones, lives in the vault and does not add it yet.

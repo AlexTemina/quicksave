@@ -1,6 +1,6 @@
 ---
 name: reference-claude-account-is-alan
-description: "Quicksave sessions must run on the Alan Claude account (alex.temina@alan.eu) so the Linear connector reaches Alan's workspace; calendar goes through Notion Calendar filtered to the work account"
+description: "Quicksave sessions must run on the Alan Claude account (alex.temina@alan.eu) so the Linear connector reaches Alan's workspace; calendar goes through the Google Calendar connector, which is the work account"
 metadata:
   node_type: memory
   type: reference
@@ -14,6 +14,6 @@ If issues come back as not found, check `whoami` on the Linear connector before 
 
 The only exception he wants personal is GitHub: pushes go with the personal account, see [[reference-push-with-personal-account]].
 
-Calendar: the Google Calendar connector is gone on the Alan account. Use Notion Calendar (`notion-calendar-list-events`). It holds both accounts, so always filter to `alex.temina@alan.eu` and never read the personal one.
+Calendar: the Google Calendar connector is back and is the work account (checked 9-nov-2026). Use its `list_events` for one day, ordered by start time. Do not use Notion Calendar for this: it returns every connected calendar at once, personal included, and today's answer was 855k characters, too large to read.
 
 `orca linear` also works and is still the way to write (create issue, relations, due date).

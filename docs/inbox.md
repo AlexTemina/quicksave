@@ -64,7 +64,7 @@ The apply writes a report and leaves drafts of anything that would post text som
 
 ## Writing
 
-This is the only part of the app that writes to Linear: states, due dates and the edited "Will do" of a card, each one at the moment he decides the card. Pull requests are the exception: they are only written, by merging or closing, when he presses Apply. The app never writes a comment. The board still only reads.
+Along with approving the plan in the [morning](morning.md), this is the only part of the app that writes to Linear: states, due dates and the edited "Will do" of a card, each one at the moment he decides the card. Pull requests are the exception: they are only written, by merging or closing, when he presses Apply. The app never writes a comment. The board still only reads.
 
 ## The Main Quest gate
 
@@ -75,3 +75,7 @@ This is the only part of the app that writes to Linear: states, due dates and th
 - The results panel and the drafts, as proposed above.
 - The agent's permission mode when the app starts it. Proposed: no prompt for each action, the apply's rules as the only limit.
 - Pull request decisions, as proposed above.
+
+## What a Triage card shows
+
+- The whole description, nothing dropped: what happened, the "Will do" highlighted, the "Why", any other section with its heading (QA, Context, Draft), and the source as written, plain text or link.

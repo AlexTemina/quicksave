@@ -18,7 +18,7 @@ Read them at the moment of running, never from memory. A source that fails is na
   - His open work: `orca linear list-issues --assignee me --json`, with states and due dates.
   - One issue with its relations: `orca linear issue <id> --relations --json`.
 - **Weekly contract:** the newest `~/vault/Journal/*Weekly Contract.md`, read only. It names the week's objectives and the milestone and date each one serves. Interim source until the contract is redesigned.
-- **The day:** today's meetings from Notion Calendar (`notion-calendar-list-events`), only the account `alex.temina@alan.eu`. Never read the personal calendar that is connected next to it. Then ask him anyway whether anything the calendar does not show changes the plan.
+- **The day:** today's meetings from Google Calendar (`list_events`), which is his work account `alex.temina@alan.eu`. Ask for that day only, ordered by start time. Not Notion Calendar: it returns every connected calendar at once, too large to read (855k characters on 9-nov). Then ask him anyway whether anything the calendar does not show changes the plan.
 
 ## Steps
 
@@ -73,12 +73,12 @@ Then stop and wait. **Nothing is written until he says ok.**
 
 Read the open Main Quest again first. If one has appeared, stop and tell him.
 
-**Continuing a slipped one:** only move its due date with `orca linear due-date set`, plus any change he approved.
+**Continuing a slipped one:** only move its due date, plus any change he approved: `orca linear save-issue <id> --due-date <yyyy-mm-dd>`.
 
 **Creating a new one:**
 
 1. Create any split or missing issue he approved.
-2. Create the issue with `orca linear save-issue`: `--team TEMI`, `--title "Main Quest: <goal>"`, `--assignee me` (the app only finds his), `--label "Main Quest"`, `--state "In Progress"`, `--due-date`, and `--body-file`.
+2. Create the issue with `orca linear save-issue`: `--team TEMI`, `--title "Main Quest: <goal>"`, `--assignee me` (the app only finds his), `--label "Main Quest"`, `--state "In Progress"`, `--due-date`, and the description with `--description "<text>"` (or `--body-file`).
 3. The description holds, in this order, the "done" sentence, the numbered pieces with their links and steps, and a `## QA` section with one check: "The `## QA` of each piece passes."
 4. Link each piece: `orca linear relation add <main quest> --related <piece> --type related`. Never as sub-issues.
 5. If a write answers `linear_write_unconfirmed`, retry it with its `--write-id`. Never create again without it.

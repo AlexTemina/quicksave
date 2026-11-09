@@ -13,13 +13,15 @@ Nothing here is inherited from older setups (Save Point, the vault, global rules
 - Every code (issue, PR) carries a 2-3 word tag of what it is: `ES-12785 (30-day invitations)`, never a bare id.
 - The app's interface is in English only, for now.
 - Linear is the source of truth for tasks and their state. Quicksave reads it and never keeps its own copy of a task's state.
+- Only two things in the app write to Linear: the inbox, when he decides a card, and the day's plan, when he approves it in the morning or adds or takes out a side quest from the board.
 
 ## Docs
 
 - [Main Quest](docs/main-quest.md): what it is and how it lives in Linear.
 - [Writing in Linear](docs/linear-writing.md): how Quicksave writes what it owns there.
 - [The board](docs/board.md): what the app shows and how it stays fresh.
-- [The inbox](docs/inbox.md): the deck of cards for triage and vault pull requests, and the only part of the app that writes.
+- [The inbox](docs/inbox.md): the deck of cards for triage and vault pull requests, which writes when he decides a card.
+- [The morning](docs/morning.md): the panel that plans the Main Quest, chooses the game and writes the standup.
 - [Background agents](docs/background-agents.md): how the app starts unattended jobs, with their permissions, model and history.
 - [Drafts](docs/drafts.md): the section where every draft lands, to post by hand and archive.
 - [Design system](docs/design-system.md): tokens and components; screens never style by hand.

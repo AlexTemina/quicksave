@@ -1,4 +1,4 @@
-- [Cuenta de Claude = Alan](reference_linear_through_orca.md) — sesión con alex.temina@alan.eu; si Linear no encuentra issues, mirar `whoami`; calendario por Notion filtrado a la cuenta de trabajo
+- [Cuenta de Claude = Alan](reference_linear_through_orca.md) — sesión con alex.temina@alan.eu; si Linear no encuentra issues, mirar `whoami`; calendario por Google Calendar (cuenta de trabajo), no Notion
 - [Contrato semanal, charla pendiente](project_weekly_contract_discussion.md) — se piensa el martes 10-nov por la tarde; hasta entonces se lee del vault
 - [Apply del auditor apagado](project_auditor_apply_disabled.md) — desde el 6-nov, hasta que exista la baraja; nada ejecuta lo aprobado solo
 - [Push con la cuenta personal](reference_push_with_personal_account.md) — `AlexTemina/*` da 403 con AlexTemina-alan; token de `gh auth token --user AlexTemina`
