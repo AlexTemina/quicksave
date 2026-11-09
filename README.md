@@ -30,7 +30,7 @@ See [Main Quest](docs/main-quest.md) for the full rules.
 
 - Each card shows the issue code, its tag and today's step.
 - Each card shows its PRs with live CI: open green, CI failing red, merged purple, draft grey, closed brown.
-- The issue's agent and what it is doing, read from Orca every few seconds: Working (pulsing), Needs you (it waits for a permission or an answer), Your turn (it finished its turn), Error. Hovering the tag shows its last reply; the detail shows it in full.
+- The card takes the color of its agent's state, read from Orca every few seconds: yellow working (breathing), green waiting for you, grey idle, red error. Hovering shows its last reply; the detail shows it in full.
 - On hover, one button opens the issue in Linear and another goes to its worktree in Orca.
 
 ### Piece detail

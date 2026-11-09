@@ -160,6 +160,14 @@ enum Orca {
         let name: String
         let lastMessage: String
         let updatedAt: Double
+        /// Where the agent runs and its terminal, so the card's Orca button goes straight to it.
+        var worktreeId = ""
+        var worktreeName = ""
+        var terminal: String?
+
+        var match: Match? {
+            worktreeId.isEmpty ? nil : Match(worktreeId: worktreeId, name: worktreeName, liveAgentTerminal: terminal)
+        }
     }
 
     /// The agent of every issue, from one `orca worktree ps`: the agents of the worktree linked to the issue, and any
@@ -174,17 +182,34 @@ enum Orca {
             return code.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range(at: 1)) }
         }
         let rank = ["blocked": 4, "error": 3, "working": 2, "done": 1]
+        // Orca names an agent's pane "<tab>:<leaf>"; the terminal list gives the handle for each.
+        var handles: [String: String] = [:]
+        if let list = try? await run(["terminal", "list", "--json"]),
+           let lo = try? JSONSerialization.jsonObject(with: list) as? [String: Any],
+           let terms = (lo["result"] as? [String: Any])?["terminals"] as? [[String: Any]] {
+            for t in terms {
+                if let tab = t["tabId"] as? String, let leaf = t["leafId"] as? String, let h = t["handle"] as? String {
+                    handles["\(tab):\(leaf)"] = h
+                }
+            }
+        }
         var out: [String: AgentState] = [:]
         for w in worktrees where (w["isArchived"] as? Bool) != true {
             var linked: String?
             if let l = w["linkedLinearIssue"] as? String { linked = l }
             else if let l = w["linkedLinearIssue"] as? [String: Any] { linked = l["identifier"] as? String }
-            for a in w["agents"] as? [[String: Any]] ?? [] where (a["hasLivePty"] as? Bool) != false {
+            for a in w["agents"] as? [[String: Any]] ?? [] {
+                // Orca keeps the record of agents long closed; only one with an open terminal counts.
+                let handle = (a["paneKey"] as? String).flatMap { handles[$0] }
+                guard (a["hasLivePty"] as? Bool) == true || handle != nil else { continue }
                 let name = (a["conversationName"] as? String) ?? (a["taskTitle"] as? String) ?? (a["displayName"] as? String) ?? ""
                 guard let id = issue(in: name) ?? linked.flatMap({ issue(in: $0) }) else { continue }
                 let state = AgentState(state: a["state"] as? String ?? "idle", name: name,
                                        lastMessage: a["lastAssistantMessage"] as? String ?? "",
-                                       updatedAt: a["updatedAt"] as? Double ?? 0)
+                                       updatedAt: a["updatedAt"] as? Double ?? 0,
+                                       worktreeId: w["worktreeId"] as? String ?? "",
+                                       worktreeName: w["displayName"] as? String ?? "",
+                                       terminal: handle)
                 if let old = out[id], (rank[old.state] ?? 0, old.updatedAt) >= (rank[state.state] ?? 0, state.updatedAt) { continue }
                 out[id] = state
             }

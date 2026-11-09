@@ -135,16 +135,15 @@ struct PieceCard: View {
     @State private var hovering = false
 
     var body: some View {
-        let worktree = store.worktrees[piece.id]
-        QSCard(content: {
+        let worktree = store.worktrees[piece.id] ?? store.agentStates[piece.id]?.match
+        let agent = store.agentStates[piece.id]
+        QSCard(tint: agent?.tint, pulsing: agent?.state == "working", content: {
             // Code, date and badges wrap to a new line in a narrow column instead of being squeezed.
             QSFlow {
                 Text(piece.id).font(Theme.Text.code).foregroundStyle(Theme.Palette.textSecondary).fixedSize()
                 if let due = piece.dueDate { QSDue(ymd: due, done: piece.column == .done) }
                 ForEach(piece.pullRequests, id: \.number) { PRBadge(pr: $0, live: store.prStatus[$0.number]).fixedSize() }
-                if let agent = store.agentStates[piece.id] {
-                    QSAgentTag(agent: agent)
-                } else if worktree?.liveAgentTerminal != nil {
+                if store.agentStates[piece.id] == nil, worktree?.liveAgentTerminal != nil {
                     QSTag(text: "Agent", icon: Theme.Icon.agentLive, color: .green).fixedSize()
                         .help("A Claude agent is live in this issue's Orca worktree")
                 }
@@ -179,6 +178,7 @@ struct PieceCard: View {
                 .help("Actions done in the issue")
             }
         }, onHoverChange: { hovering = $0 })
+        .help(agent.map { a in a.lastMessage.isEmpty ? a.name : "Agent: " + String(a.lastMessage.prefix(300)) } ?? "")
         .onTapGesture { showDetail = true }
         .popover(isPresented: $showDetail, arrowEdge: .bottom) {
             ScrollView {

@@ -57,9 +57,9 @@ enum Theme {
         static let questMain = Color(hex: "#f5b82e")
         static let questSide = Color(hex: "#4cb782")
         /// What an agent is doing.
-        static let agentWorking = Color(hex: "#4cb782")
-        static let agentNeedsYou = Color.orange
-        static let agentDone = Color(hex: "#8b5cf6")
+        static let agentWorking = Color(hex: "#f2c94c")
+        static let agentWaiting = Color(hex: "#4cb782")
+        static let agentIdle = Color(hex: "#95a2b3")
     }
 
     enum Text {
@@ -145,6 +145,12 @@ enum Theme {
         ]
     }
 
+    enum Opacity {
+        /// How strongly a state color paints a card, its breath when pulsing, and its border.
+        static let tint: Double = 0.16
+        static let tintPulse: Double = 0.30
+    }
+
     enum Leading {
         /// Extra space between lines of running text.
         static let body: CGFloat = 3
@@ -154,6 +160,8 @@ enum Theme {
         static let hover = Animation.easeOut(duration: 0.15)
         /// A progress bar filling: a little bounce, so finishing something feels good.
         static let fill = Animation.spring(response: 0.45, dampingFraction: 0.6)
+        /// A card breathing while its agent works.
+        static let breath = Animation.easeInOut(duration: 1.4).repeatForever(autoreverses: true)
         /// How long the pointer rests on a link before its hover card shows.
         static let hoverCardDelay = Duration.milliseconds(800)
     }

@@ -56,7 +56,9 @@ Orca owns which worktree belongs to which issue (`orca reference find <issue>`).
 
 ## Agent status
 
-- Every card shows what its issue's agent is doing, from `orca worktree ps`, read every 8 seconds: **Working** (pulsing), **Needs you** (blocked on a permission or a question, pulsing), **Your turn** (its turn ended), **Error**. An idle or closed agent shows nothing.
+- Every card is painted with what its issue's agent is doing, to see it at a glance, from `orca worktree ps`, read every 8 seconds: **yellow** working (the color breathes), **green** waiting for him (its turn ended, or it needs a permission or an answer), **grey** idle, **red** error. A card with no agent keeps its normal look.
 - An issue's agent is one in the worktree linked to it, or any agent whose conversation is named after it (`ES-12867 — …`). With several, the one that needs him most wins, then the most recent.
-- Hovering the tag shows the agent's last reply. The piece's detail shows it in full, with when it last moved.
+- Only agents with an open terminal count: Orca keeps the record of agents closed long ago, and one of them painted `ES-12726` green on 9-nov. The card's Orca button goes to the same agent its color comes from.
+- The color fills the card; the border stays the normal hairline.
+- Hovering the card shows the agent's last reply. The piece's detail shows it in full, with when it last moved.
 - Commands run by the app are read while they run: `orca worktree ps` prints more than a pipe holds, and read only at the end it never finished (9-nov).

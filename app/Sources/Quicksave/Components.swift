@@ -26,6 +26,10 @@ enum QSCrystalMark {
 
 struct QSCard<Content: View>: View {
     var highlighted = false
+    /// A color that paints the whole card, to read its state at a glance (the agent's, on quest cards).
+    var tint: Color? = nil
+    /// The tint breathes slowly, for something that is happening right now.
+    var pulsing = false
     @ViewBuilder let content: Content
     @State private var hovering = false
     /// Lets the card's content show its actions only while the pointer is over it.
@@ -38,14 +42,34 @@ struct QSCard<Content: View>: View {
             .background(
                 RoundedRectangle(cornerRadius: Theme.Radius.m).fill(Theme.Palette.surface)
                     .overlay(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(highlighted ? Theme.Palette.highlight : .clear))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.m).fill((tint ?? .clear).opacity(Theme.Opacity.tint)))
+                    // The breath is its own view, there only while pulsing: when the state changes it is gone at once,
+                    // instead of an endless animation carrying the old color on.
+                    .overlay { if pulsing, let tint { QSBreath(color: tint, radius: Theme.Radius.m).id(tint) } }
                     .shadow(color: hovering ? Theme.Palette.shadowHover : Theme.Palette.shadow, radius: hovering ? 8 : 3, y: hovering ? 3 : 1)
             )
             .overlay(RoundedRectangle(cornerRadius: Theme.Radius.m).strokeBorder(Theme.Palette.hairline, lineWidth: 0.5))
+
             .scaleEffect(hovering ? 1.01 : 1)
             .animation(Theme.Motion.hover, value: hovering)
             .onHover { hovering = $0; onHoverChange($0) }
             .qsClickableCursor()
             .contentShape(Rectangle())
+    }
+}
+
+/// A color that slowly brightens and fades over a card, for something happening right now.
+struct QSBreath: View {
+    let color: Color
+    let radius: CGFloat
+    @State private var on = false
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: radius)
+            .fill(color)
+            .opacity(on ? Theme.Opacity.tintPulse - Theme.Opacity.tint : 0)
+            .allowsHitTesting(false)
+            .onAppear { withAnimation(Theme.Motion.breath) { on = true } }
     }
 }
 
@@ -363,6 +387,18 @@ struct PRBadge: View {
     }
 }
 
+extension Orca.AgentState {
+    /// The color a quest card takes for its agent: yellow working, green waiting for him, grey idle, red error.
+    var tint: Color {
+        switch state {
+        case "working": return Theme.Palette.agentWorking
+        case "blocked", "done": return Theme.Palette.agentWaiting
+        case "error": return Theme.Palette.prFailing
+        default: return Theme.Palette.agentIdle
+        }
+    }
+}
+
 /// What the issue's agent is doing, as a tag: Working pulses, Needs you asks for him, Your turn says it finished.
 struct QSAgentTag: View {
     let agent: Orca.AgentState
@@ -370,10 +406,10 @@ struct QSAgentTag: View {
     private var look: (text: String, icon: String, color: Color)? {
         switch agent.state {
         case "working": return ("Working", Theme.Icon.agentLive, Theme.Palette.agentWorking)
-        case "blocked": return ("Needs you", "hand.raised.fill", Theme.Palette.agentNeedsYou)
-        case "done": return ("Your turn", "checkmark.bubble.fill", Theme.Palette.agentDone)
+        case "blocked": return ("Needs you", "hand.raised.fill", Theme.Palette.agentWaiting)
+        case "done": return ("Your turn", "checkmark.bubble.fill", Theme.Palette.agentWaiting)
         case "error": return ("Error", "exclamationmark.octagon.fill", Theme.Palette.prFailing)
-        default: return nil
+        default: return ("Idle", "moon.zzz.fill", Theme.Palette.agentIdle)
         }
     }
 
