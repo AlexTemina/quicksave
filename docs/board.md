@@ -17,7 +17,7 @@ What the app shows, and nothing else yet.
 
 ## Going to Orca
 
-Orca owns which worktree belongs to which issue (`orca reference find <issue>`). The one name Quicksave reads is the agent tab's title, which `/start-task` sets to the issue's code (`ES-12867 — …`), as Save Point did.
+Orca owns which worktree belongs to which issue (`orca reference find <issue>`). The one name Quicksave reads is the agent tab's title, which `/start-task` sets to the issue's code (`ES-12867 — …`).
 
 1. A linked worktree with a live agent: bring that agent's tab forward.
 2. A linked worktree without one: bring its first open terminal forward, or open a new terminal there.

@@ -30,7 +30,7 @@ enum Orca {
             return Match(worktreeId: pick.workspace.id, name: pick.workspace.name,
                          liveAgentTerminal: pick.agents?.first { $0.liveness == "live" }?.terminal)
         }
-        // No linked worktree: an agent tab named after the issue still counts, wherever it runs (Save Point's rule).
+        // No linked worktree: an agent tab named after the issue still counts, wherever it runs.
         if let t = await namedAgent(issue) {
             return Match(worktreeId: t.worktreeId, name: (t.worktreePath as NSString).lastPathComponent, liveAgentTerminal: t.handle)
         }

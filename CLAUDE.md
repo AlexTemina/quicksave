@@ -2,7 +2,7 @@
 
 A native macOS app that shows Alejandro's day, read live from Linear. Built from zero, one feature at a time, each one discussed before any code.
 
-Nothing here is inherited from older setups (Save Point, the vault, global rules). A rule exists only if it is written in this file.
+Nothing here is inherited from older setups (the vault, global rules). A rule exists only if it is written in this file.
 
 ## Rules
 
