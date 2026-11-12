@@ -45,3 +45,22 @@ Each one is a [background agent](background-agents.md) with its own list of allo
 
 - Typing a game of his own instead of choosing one of the five.
 - The morning contract that fills Side Quests, once the weekly contract is redesigned (Tuesday 10-nov).
+
+## Auditor
+
+- The plan screen opens with one card, in plain words: when the auditor last read his sources (Slack, mail, GitHub, Linear, meetings), or that it is reading them now. A source it could not read is named, with when it was last read and the error, because the Inbox may be missing things from there.
+- It is read from the auditor's watermark on the vault's `main` and from Orca's runs of the `auditor-deep` automation. Quicksave never writes either.
+- **Read again now** asks Orca to run `auditor-deep` at once. It is hidden while a run is going, so two never overlap in the same worktree.
+- **What it said** opens, in a popover, what the last run said when it ended (the sources it read and what it changed), as Orca kept it, with the run number and when it ended. Hidden while a run is going.
+- The morning never waits for it: a run took 50 minutes on 10-nov. When a run the panel saw going ends, the inbox is read again, and what it filed shows in the gate.
+- The first version listed every source as a chip with two different times, and he could not read it (10-nov).
+
+## What the plan must look at
+
+The app reads Linear itself and hands the plan three lists, so the agent cannot leave something out unnoticed:
+
+1. **The window:** every open issue of his that is overdue or due by the end of Alan's week (the coming Wednesday, today included), urgent or high, or in progress or in review. Collectibles and the Main Quest aside. Each one must end up as a piece, a side quest, or left out with its reason. If the plan forgets one, the panel says which.
+2. **The medium slot:** one side quest a day comes from his medium, low or no-priority issues in Todo outside the window, the one untouched for longest first, so the middle of the pile moves too. It shows as "(medium slot)".
+3. **His projects:** the projects he leads (not the Auditor's), their open issues not assigned to him in the same window. The plan lists under "Your projects: worth a look" only what needs his eye today: overdue, blocked, waiting on him, risky for a date.
+
+The weekly review of the whole pile, so medium things get a date they deserve, happens in the Tuesday contract session (12-nov): every open issue leaves with a date, Backlog or canceled.

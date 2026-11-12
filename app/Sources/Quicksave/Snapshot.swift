@@ -12,7 +12,8 @@ enum Snapshot {
     static func boardIfAsked(_ store: Store) {
         guard !boardDone, let folder = ProcessInfo.processInfo.environment["QUICKSAVE_SNAPSHOT"] else { return }
         boardDone = true
-        write(AnyView(BoardContent(store: store)), width: CGFloat(Double(ProcessInfo.processInfo.environment["QUICKSAVE_SNAPSHOT_WIDTH"] ?? "") ?? 944), to: URL(fileURLWithPath: folder).appendingPathComponent("board.png"))
+        let width = CGFloat(Double(ProcessInfo.processInfo.environment["QUICKSAVE_SNAPSHOT_WIDTH"] ?? "") ?? 944)
+        write(AnyView(BoardContent(store: store, wide: width + Theme.Space.xl * 2 >= Theme.Size.wideBoard)), width: width, to: URL(fileURLWithPath: folder).appendingPathComponent("board.png"))
     }
 
     private static func write(_ view: AnyView, width: CGFloat, to url: URL) {
@@ -34,6 +35,7 @@ enum Snapshot {
             switch card {
             case .triage(let item): view = AnyView(TriageCardView(item: item))
             case .pullRequest(let pr): view = AnyView(PullRequestCardView(pr: pr))
+            case .expired(let e): view = AnyView(ExpiredCardView(item: e))
             }
             let renderer = ImageRenderer(content: view.frame(width: Theme.Size.deckWidth).padding().background(Color.white))
             renderer.scale = 1.5

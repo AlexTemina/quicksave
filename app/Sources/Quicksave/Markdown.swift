@@ -99,18 +99,40 @@ struct MarkdownBlock: View {
                         .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.12)))
                 case .folded(let t): Label(t, systemImage: "chevron.right").font(.caption).foregroundStyle(.secondary)
                 case .paragraph(let t): MD(t)
+                case .table(let header, let rows): MarkdownTable(header: header, rows: rows)
+                case .quote(let t):
+                    MD(t).foregroundStyle(.secondary).padding(.leading, Theme.Space.m)
+                        .overlay(alignment: .leading) { Capsule().fill(Color.secondary.opacity(0.4)).frame(width: 3) }
+                case .rule: Divider()
                 }
             }
         }
         .textSelection(.enabled)
     }
 
-    enum Block { case heading(String), bullet(String, String, Int), code(String), folded(String), paragraph(String) }
+    enum Block { case heading(String), bullet(String, String, Int), code(String), folded(String), paragraph(String), table([String], [[String]]), quote(String), rule }
 
     static func blocks(_ s: String) -> [Block] {
-        var out: [Block] = [], code: [String]? = nil, folded = false
+        var out: [Block] = [], code: [String]? = nil, folded = false, table: [[String]] = []
+        func cells(_ line: String) -> [String] {
+            var l = Substring(line)
+            if l.hasPrefix("|") { l = l.dropFirst() }
+            if l.hasSuffix("|") { l = l.dropLast() }
+            return l.components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+        }
+        func flushTable() {
+            guard !table.isEmpty else { return }
+            out.append(.table(table[0], Array(table.dropFirst())))
+            table = []
+        }
         for raw in s.components(separatedBy: "\n") {
             let line = raw.trimmingCharacters(in: .whitespaces)
+            // A table: consecutive lines starting with "|"; the "|---|---|" line under the header is dropped.
+            if code == nil, !folded, line.hasPrefix("|") {
+                if line.range(of: #"^\|?[\s:|-]+\|?$"#, options: .regularExpression) == nil { table.append(cells(line)) }
+                continue
+            }
+            flushTable()
             if line.hasPrefix("```") {
                 if let c = code { out.append(.code(c.joined(separator: "\n"))); code = nil } else { code = [] }
                 continue
@@ -123,6 +145,8 @@ struct MarkdownBlock: View {
             }
             if folded || line.isEmpty { continue }
             let indent = (raw.prefix { $0 == " " }.count) / 2
+            if line.range(of: #"^(-{3,}|\*{3,}|_{3,})$"#, options: .regularExpression) != nil { out.append(.rule); continue }
+            if line.hasPrefix(">") { out.append(.quote(line.drop { $0 == ">" }.trimmingCharacters(in: .whitespaces))); continue }
             if line.hasPrefix("#") { out.append(.heading(line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces))); continue }
             if let (prefix, mark) = [("- [ ] ", "☐"), ("* [ ] ", "☐"), ("- [x] ", "☑"), ("* [x] ", "☑"), ("- ", "•"), ("* ", "•")]
                 .first(where: { line.hasPrefix($0.0) }) {
@@ -133,9 +157,36 @@ struct MarkdownBlock: View {
             }
             out.append(.paragraph(line))
         }
+        flushTable()
         if let c = code { out.append(.code(c.joined(separator: "\n"))) }
         return out
     }
+}
+
+/// A Markdown table: a bold header, a hairline under it and between rows, columns sized to their content.
+struct MarkdownTable: View {
+    let header: [String]
+    let rows: [[String]]
+
+    var body: some View {
+        let width = max(header.count, rows.map(\.count).max() ?? 0)
+        Grid(alignment: .topLeading, horizontalSpacing: Theme.Space.m, verticalSpacing: Theme.Space.s) {
+            GridRow {
+                ForEach(0..<width, id: \.self) { i in MD(cell(header, i)).fontWeight(.semibold) }
+            }
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                Divider().gridCellUnsizedAxes(.horizontal)
+                GridRow {
+                    ForEach(0..<width, id: \.self) { i in MD(cell(row, i)).fixedSize(horizontal: false, vertical: true) }
+                }
+            }
+        }
+        .padding(Theme.Space.m)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.s).fill(Color.secondary.opacity(0.08)))
+    }
+
+    private func cell(_ row: [String], _ i: Int) -> String { i < row.count ? row[i] : "" }
 }
 
 

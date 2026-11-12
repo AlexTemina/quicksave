@@ -24,6 +24,21 @@ One section of the app where every draft lands, whichever part of the app produc
 - Archived drafts leave the list but are kept, in an archive view, so a draft can come back.
 - Drafts are Quicksave's own data and not a task's state, so they live in the local database and survive closing the window.
 
+## Talking about a draft (10-nov)
+
+Each draft has a "Talk" button that opens a conversation with the agent under the text.
+
+- It is the shared AI conversation (see the design system): what the agent may touch on top, the conversation, what it is doing right now while it works, and a box where Return sends and Shift-Return adds a line (11-nov).
+- He writes what to change, or uses a quick button: Shorter, Less jargon, More direct.
+- When the draft keeps the session of the agent that wrote it (Tuesday's rituals), that same session continues, so it remembers everything it read and answers in seconds. Each turn forks the session, so the original is never touched and two drafts of the same batch can be talked over at once.
+- A draft without a session (older ones, the inbox's) starts a new agent with the conversation so far, which may read the item behind it. From its first answer on, that session continues.
+- The agent answers with a new version, shown as it will look, or with a question when it needs something from him (purple, and the box gets a purple edge). He answers in the same box.
+- A new version is a proposal: the draft keeps its text until he presses "Use this version". The next message works on the last proposal, used or not (11-nov).
+- Every version is kept: the first draft, each rewrite, each hand edit. v1, v2, v3 sit above the conversation; clicking one puts it back. "Show changes" marks what the current version changed against the one before.
+- The agent never posts or saves anywhere; it only returns text.
+
+Not built yet: one conversation for a whole batch (all of Tuesday's updates at once), and "Remember this", to keep a correction as a rule of the ritual.
+
 ## In the inbox
 
 The results panel after "Apply" shows what was done and what needs him. The drafts it produced go straight to this section, and the panel says how many were added, with a button to open them.

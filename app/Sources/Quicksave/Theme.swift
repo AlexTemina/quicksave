@@ -58,8 +58,13 @@ enum Theme {
         static let questSide = Color(hex: "#4cb782")
         /// What an agent is doing.
         static let agentWorking = Color(hex: "#f2c94c")
-        static let agentWaiting = Color(hex: "#4cb782")
+        static let agentWaiting = Color(hex: "#f28c38")
         static let agentIdle = Color(hex: "#95a2b3")
+        /// An agent stopped on a question or a permission: it cannot go on until he answers.
+        static let agentAsking = Color(hex: "#b06cf0")
+        /// A review comment already on GitHub, and one his notes just changed.
+        static let published = prOpen
+        static let touched = Color(hex: "#f2c94c")
     }
 
     enum Text {
@@ -77,7 +82,8 @@ enum Theme {
     enum Size {
         static let dot: CGFloat = 8
         static let smallDot: CGFloat = 6
-        static let columnMin: CGFloat = 170
+        static let columnMin: CGFloat = 150
+        static let columnMax: CGFloat = 400
         static let columnCollapsed: CGFloat = 34
         static let columnMinHeight: CGFloat = 64
         static let popoverWidth: CGFloat = 660
@@ -86,6 +92,12 @@ enum Theme {
         static let dayBarHeight: CGFloat = 14
         static let miniBarHeight: CGFloat = 5
         static let deckWidth: CGFloat = 640
+        /// Drafts are long texts read and talked over: they take most of the window.
+        static let draftsWidth: CGFloat = 1100
+        /// The conversation under a draft scrolls past this height.
+        static let threadMaxHeight: CGFloat = 320
+        /// A conversation with the AI scrolls past this height.
+        static let conversationMaxHeight: CGFloat = 560
         static let sheetWidth: CGFloat = 620
         static let sheetMaxHeight: CGFloat = 700
         static let decisionButton: CGFloat = 78
@@ -94,7 +106,13 @@ enum Theme {
         static let hoverCardWidth: CGFloat = 380
         static let pickerWidth: CGFloat = 540
         static let collectiblesWidth: CGFloat = 250
+        /// Below this window width the collectibles move under the quests.
+        static let wideBoard: CGFloat = 1180
         static let morningWidth: CGFloat = 720
+        /// Reviews: the list of pull requests on the left, the review on the right.
+        static let reviewListWidth: CGFloat = 330
+        static let flowHeight: CGFloat = 640
+        static let notesMinHeight: CGFloat = 160
         static let morningHeight: CGFloat = 800
     }
 
@@ -115,6 +133,8 @@ enum Theme {
         static let pullRequest = "arrow.triangle.pull"
         static let morning = "sunrise.fill"
         static let collectibles = "diamond.fill"
+        static let review = "eye"
+        static let published = "checkmark.seal.fill"
     }
 
     /// The app's crystal as pixel art for the menu bar, one point per pixel. The outline keeps it legible on a light bar.
@@ -148,7 +168,9 @@ enum Theme {
     enum Opacity {
         /// How strongly a state color paints a card, its breath when pulsing, and its border.
         static let tint: Double = 0.16
-        static let tintPulse: Double = 0.30
+        /// A working card breathes between almost clear and a strong yellow, so it reads as alive at a glance (9-nov).
+        static let breathLow: Double = 0.04
+        static let breathHigh: Double = 0.50
     }
 
     enum Leading {
@@ -161,7 +183,9 @@ enum Theme {
         /// A progress bar filling: a little bounce, so finishing something feels good.
         static let fill = Animation.spring(response: 0.45, dampingFraction: 0.6)
         /// A card breathing while its agent works.
-        static let breath = Animation.easeInOut(duration: 1.4).repeatForever(autoreverses: true)
+        static let breath = Animation.easeInOut(duration: 0.9).repeatForever(autoreverses: true)
+        /// A card blinking fast while its agent waits on a question from him.
+        static let blink = Animation.easeInOut(duration: 0.35).repeatForever(autoreverses: true)
         /// How long the pointer rests on a link before its hover card shows.
         static let hoverCardDelay = Duration.milliseconds(800)
     }

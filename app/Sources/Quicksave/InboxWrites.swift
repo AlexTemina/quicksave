@@ -23,6 +23,38 @@ enum InboxWrites {
             try await Orca.linearWrite(["save-issue", item.id, "--state", "Canceled"]) { await isIn(item.id, "Canceled") }
         case .alreadyDone:
             try await Orca.linearWrite(["save-issue", item.id, "--state", "Done"]) { await isIn(item.id, "Done") }
+        case .backlog:
+            try await Orca.linearWrite(["save-issue", item.id, "--state", "Backlog"]) { await isIn(item.id, "Backlog") }
+        case .instruct:
+            break
+        }
+    }
+
+    /// An expired issue: today keeps it with today's date, a correction is a new date (yyyy-MM-dd), backlog drops
+    /// the date, reject cancels it and already done closes it.
+    static func write(_ decision: InboxDecision, for item: ExpiredItem) async throws {
+        let id = item.id
+        switch decision {
+        case .accept:
+            try await Orca.linearWrite(["save-issue", id, "--due-date", today()])
+        case .correct(let date):
+            guard item.canPostpone else { throw QuicksaveError.message("\(id) was already postponed \(item.postpones) times.") }
+            try await Orca.linearWrite(["save-issue", id, "--due-date", date])
+        case .backlog:
+            try await Orca.linearWrite(["save-issue", id, "--state", "Backlog", "--due-date", "null"]) { await isIn(id, "Backlog") }
+        case .reject:
+            try await Orca.linearWrite(["save-issue", id, "--state", "Canceled"]) { await isIn(id, "Canceled") }
+        case .alreadyDone:
+            try await Orca.linearWrite(["save-issue", id, "--state", "Done"]) { await isIn(id, "Done") }
+        case .instruct:
+            break // carried out by an agent, see Store.decide
+        }
+    }
+
+    /// Puts an expired issue back as it was: its state and its old due date.
+    static func undo(_ item: ExpiredItem) async throws {
+        try await Orca.linearWrite(["save-issue", item.id, "--state", item.issue.state.name, "--due-date", item.issue.dueDate ?? "null"]) {
+            await isIn(item.id, item.issue.state.name)
         }
     }
 

@@ -32,6 +32,8 @@ struct PullRequest: Hashable {
     let url: URL
     /// Linear's view of it: "open", "merged", "closed", "draft"… nil when unknown.
     let status: String?
+    /// The attachment's title in Linear, usually the PR's title.
+    var title: String? = nil
 
     /// GitHub PR attachments on a Linear issue, newest number first.
     static func from(_ issue: LinearIssue) -> [PullRequest] {
@@ -42,7 +44,7 @@ struct PullRequest: Hashable {
             guard let m = re.firstMatch(in: a.url, range: NSRange(location: 0, length: ns.length)),
                   let n = Int(ns.substring(with: m.range(at: 1))), let url = URL(string: a.url) else { continue }
             let status = a.metadata?.draft == true ? "draft" : a.metadata?.status?.lowercased()
-            if !out.contains(where: { $0.number == n }) { out.append(PullRequest(number: n, url: url, status: status)) }
+            if !out.contains(where: { $0.number == n }) { out.append(PullRequest(number: n, url: url, status: status, title: a.title)) }
         }
         return out.sorted { $0.number > $1.number }
     }
@@ -63,6 +65,10 @@ struct Piece: Identifiable {
     var dueDate: String? = nil
     /// A side quest: same card and detail as a piece, it just sits below the Main Quest.
     var isSide = false
+    /// Open in an Orca worktree but not in today's plan: shown with the side quests, in another look, so nothing open
+    /// is out of sight. The worktrees it is open in.
+    var openIn: [Orca.OpenWorktree] = []
+    var isLoose: Bool { !openIn.isEmpty }
 
     static func from(_ p: LinearIssue, order: Int, tag: String, step: String, isSide: Bool = false) -> Piece {
         Piece(id: p.identifier, title: p.title, stateName: p.state.name, description: MainQuest.clean(p.description ?? ""),

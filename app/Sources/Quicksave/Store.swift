@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import Foundation
 
-enum AppTab: Hashable { case today, inbox, drafts }
+enum AppTab: Hashable { case today, inbox, reviews, drafts }
 
 @MainActor
 final class Store: ObservableObject {
@@ -10,6 +10,7 @@ final class Store: ObservableObject {
         switch ProcessInfo.processInfo.environment["QUICKSAVE_TAB"] {
         case "inbox": return .inbox
         case "drafts": return .drafts
+        case "reviews": return .reviews
         default: return .today
         }
     }()
@@ -42,6 +43,30 @@ final class Store: ObservableObject {
     func openMorning() {
         if morningDay != Morning.today && !morningBusy { resetMorning() }
         morningOpen = true
+        Task { await loadAuditor() }
+    }
+
+    // MARK: Auditor
+
+    @Published var auditor: Auditor.Status?
+    @Published var auditorStarting = false
+    @Published var auditorNotice: String?
+
+    /// Reads the auditor's last sweep. When a sweep it saw running has ended, the inbox is read again for what it filed.
+    func loadAuditor() async {
+        let was = auditor?.run?.running == true
+        let now = await Auditor.status()
+        auditor = now
+        if was && now.run?.running != true { await refresh() }
+    }
+
+    func sweepNow() async {
+        guard !auditorStarting, auditor?.run?.running != true else { return }
+        auditorStarting = true
+        auditorNotice = nil
+        do { try await Auditor.sweepNow() } catch { auditorNotice = "The sweep could not start: \(error.localizedDescription)" }
+        await loadAuditor()
+        auditorStarting = false
     }
 
     func resetMorning() {
@@ -56,6 +81,9 @@ final class Store: ObservableObject {
     }
 
     /// Asks for a plan, or for a new one with his correction applied. Nothing is written.
+    /// What the last proposal had to place, to check the plan left nothing out.
+    @Published var morningWindow: DayWindow?
+
     func proposePlan(correction: String?) async {
         guard !morningProposing, !applying else { return }
         if let correction, let current = morningPlanJSON { morningRounds.append((current, correction)) }
@@ -63,7 +91,10 @@ final class Store: ObservableObject {
         morningNotice = nil
         defer { morningProposing = false }
         do {
-            let run = try await Agents.run(.morningPlan(comments: morningComments, rounds: morningRounds))
+            // The app reads what the plan must place; the agent then cannot leave any of it out unnoticed.
+            if let key = Database.shared.secret("linearApiKey") { morningWindow = await DayWindow.load(key: key) }
+            let run = try await Agents.run(.morningPlan(comments: morningComments, rounds: morningRounds,
+                                                        window: morningWindow?.prompt ?? "Quicksave could not read Linear for you: read his issues yourself."))
             morningPlan = try JSONDecoder().decode(MorningPlan.self, from: Data(run.resultJSON.utf8))
             morningPlanJSON = run.resultJSON
         } catch {
@@ -172,6 +203,7 @@ final class Store: ObservableObject {
     func loadDrafts() {
         drafts = Database.shared.drafts(archived: false)
         archivedDrafts = Database.shared.drafts(archived: true)
+        draftTurns = Database.shared.draftTurns()
     }
 
     @Published var draftingIds: Set<Int64> = []
@@ -198,27 +230,81 @@ final class Store: ObservableObject {
         }
     }
 
-    @Published var rewritingId: Int64?
+    /// The conversation about each draft, by draft. See docs/drafts.md.
+    @Published var draftTurns: [Int64: [DraftTurn]] = [:]
+    @Published var talkingIds: Set<Int64> = []
+    /// What the agent is doing right now in each conversation, in a few words.
+    @Published var talkSteps: [Int64: String] = [:]
 
-    /// Asks an agent to rewrite a draft's text following his instruction. Nothing is saved: the text comes back to the
-    /// editor and he decides.
-    func rewriteDraft(_ draft: DraftItem, text: String, instruction: String, useContext: Bool) async -> (text: String, notes: String)? {
-        rewritingId = draft.id
+    /// The version a draft's conversation is about: the last one written, by the agent or by hand, else the draft.
+    func latestVersion(_ draft: DraftItem) -> String {
+        (draftTurns[draft.id] ?? []).last(where: { $0.body != nil })?.body ?? draft.body
+    }
+
+    /// The agent's last version, while he has not used it yet. The draft keeps its text until he does.
+    func pendingProposal(_ draft: DraftItem) -> DraftTurn? {
+        guard let last = (draftTurns[draft.id] ?? []).last(where: { $0.body != nil }),
+              last.who == .agent, last.body != draft.body else { return nil }
+        return last
+    }
+
+    /// Sends his message about a draft to the agent. It answers with a new version to use, or with a question.
+    func talk(_ draft: DraftItem, message: String) async {
+        let message = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !message.isEmpty, !talkingIds.contains(draft.id) else { return }
+        talkingIds.insert(draft.id)
+        talkSteps[draft.id] = "Starting"
         draftsNotice = nil
-        defer { rewritingId = nil }
-        do {
-            let run = try await Agents.run(.rewriteDraft(place: draft.place, note: draft.note, link: draft.link?.absoluteString,
-                                                         item: draft.item, text: text, instruction: instruction, useContext: useContext))
-            let result = try JSONDecoder().decode(DraftRewriteResult.self, from: Data(run.resultJSON.utf8))
-            return (result.text, result.notes ?? "")
-        } catch {
-            draftsNotice = "The AI could not rewrite it: \(error.localizedDescription)"
-            return nil
+        defer { talkingIds.remove(draft.id); talkSteps[draft.id] = nil }
+        let history = draftTurns[draft.id] ?? []
+        let current = latestVersion(draft)
+        if !history.contains(where: { $0.body != nil }) {
+            Database.shared.addDraftTurn(draft.id, who: .original, text: "First draft", body: draft.body)
         }
+        Database.shared.addDraftTurn(draft.id, who: .me, text: message, body: nil)
+        loadDrafts()
+        do {
+            let job = AgentJob.draftTalk(draft, text: current, history: history, message: message)
+            let id = draft.id
+            let run = try await Agents.run(job) { step in
+                Task { @MainActor [weak self] in if self?.talkingIds.contains(id) == true { self?.talkSteps[id] = step } }
+            }
+            let result = try JSONDecoder().decode(DraftTalkResult.self, from: Data(run.resultJSON.utf8))
+            if let id = run.sessionId { Database.shared.setDraftSession(draft.id, session: id, dir: job.directory) }
+            if let text = result.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                // A proposal: the draft keeps its text until he uses it.
+                Database.shared.addDraftTurn(draft.id, who: .agent, text: result.notes ?? "Rewritten.", body: text)
+            } else {
+                Database.shared.addDraftTurn(draft.id, who: .agent, text: result.question ?? result.notes ?? "It gave no answer.", body: nil)
+            }
+        } catch {
+            draftsNotice = "The agent could not answer: \(error.localizedDescription)"
+        }
+        loadDrafts()
+    }
+
+    /// He uses the version the agent proposed: it becomes the draft's text.
+    func useProposal(_ draft: DraftItem, _ turn: DraftTurn) {
+        guard let body = turn.body else { return }
+        Database.shared.updateDraftBody(draft.id, body)
+        loadDrafts()
+    }
+
+    /// Puts an earlier version back as the draft's text.
+    func restoreVersion(_ draft: DraftItem, body: String, number: Int) {
+        Database.shared.updateDraftBody(draft.id, body)
+        Database.shared.addDraftTurn(draft.id, who: .back, text: "Back to v\(number)", body: body)
+        loadDrafts()
     }
 
     func editDraft(_ id: Int64, body: String) {
+        let old = drafts.first(where: { $0.id == id })?.body
+        guard old != body else { return }
+        if !(draftTurns[id] ?? []).contains(where: { $0.body != nil }), let old {
+            Database.shared.addDraftTurn(id, who: .original, text: "First draft", body: old)
+        }
         Database.shared.updateDraftBody(id, body)
+        Database.shared.addDraftTurn(id, who: .hand, text: "Edited by hand", body: body)
         loadDrafts()
     }
 
@@ -252,6 +338,9 @@ final class Store: ObservableObject {
     /// Today's side quests, read live from the issues the Main Quest lists.
     @Published var sideQuests: [Piece] = []
     @Published var collectibles: [Linear.QueueIssue] = []
+    /// Issues open in an Orca worktree that are not in today's plan, and worktrees with no issue at all.
+    @Published var looseWork: [Piece] = []
+    @Published var strayWorktrees: [Orca.OpenWorktree] = []
     /// Side quests being added or taken out right now.
     @Published var planWriting: Set<String> = []
     @Published var planNotice: String?
@@ -289,6 +378,22 @@ final class Store: ObservableObject {
         await refresh()
     }
 
+    @Published var endingDay = false
+
+    /// "End the day": the vault's /evening, in an agent opened in Orca so he follows and answers it.
+    func endDay() async {
+        guard !endingDay else { return }
+        endingDay = true
+        agentNotice = nil
+        defer { endingDay = false }
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_GB"); f.dateFormat = "d MMM"
+        do {
+            try await Orca.startAgent(in: NSHomeDirectory() + "/vault", title: "Evening — " + f.string(from: Date()), prompt: "/evening")
+        } catch {
+            agentNotice = "The evening could not be opened: \(error.localizedDescription)"
+        }
+    }
+
     /// The first prompt of an agent opened by the app, the same rules /start-task gives its agents.
     private func kickoff(_ piece: Piece) -> String {
         let url = piece.url?.absoluteString ?? ""
@@ -300,19 +405,183 @@ final class Store: ObservableObject {
     @Published var worktrees: [String: Orca.Match] = [:]
     /// What each issue's agent is doing, refreshed every few seconds: it changes fast.
     @Published var agentStates: [String: Orca.AgentState] = [:]
+    /// Live agents no issue names: they show apart, below the side quests, so nothing open in Orca escapes the app.
+    @Published var unlinkedAgents: [Orca.AgentState] = []
     private var agentTimer: Timer?
 
     private var agentsLoading = false
+
+    /// Agents being closed from the app, by terminal, so their button shows it is busy.
+    @Published var closingAgents: Set<String> = []
+
+    /// Closes an agent's tab in Orca. Its worktree, its files and Linear do not change.
+    func closeAgent(_ agent: Orca.AgentState) async {
+        guard let handle = agent.terminal, !closingAgents.contains(handle) else { return }
+        closingAgents.insert(handle)
+        defer { closingAgents.remove(handle) }
+        agentNotice = nil
+        do { try await Orca.close(terminal: handle) }
+        catch { agentNotice = "\(agent.name.isEmpty ? "The agent" : agent.name) could not be closed: \(error.localizedDescription)" }
+        await refreshAgents()
+    }
 
     func refreshAgents() async {
         // One read at a time: a slow Orca must never pile reads up.
         guard !agentsLoading else { return }
         agentsLoading = true
         defer { agentsLoading = false }
-        let states = await Orca.agentStates()
+        let all = await Orca.allAgents()
+        let states = all.byIssue
         if states != agentStates { agentStates = states }
+        if all.unlinked != unlinkedAgents { unlinkedAgents = all.unlinked }
+        if !ciFixing.isEmpty { await followCIFixes(states) }
     }
+    // MARK: Watching what waits
+
+    /// What the watch found new on cards in Pending for inputs, by issue, until he says he has seen it.
+    @Published var watchNews: [String: Watch.News] = Database.shared.value("watch.news", as: [String: Watch.News].self) ?? [:]
+    @Published var watchChecked: Date?
+    /// How the last look at each card went: when, what it read and what it could not.
+    @Published var watchStatus: [String: Watch.Status] = [:]
+    @Published var watchingNow = false
+    private var watchTimer: Timer?
+    private var watchTick = 0
+
+    /// The cards being watched: every card on the board in Pending for inputs or In Review.
+    var watchedCards: [Piece] { ((quest?.pieces ?? []) + sideQuests + looseWork).filter { [.pending, .inReview].contains($0.column) } }
+
+    /// Agents asked to fix a red CI, by issue: when they asked, and whether they have been seen working since. When one
+    /// stops, its last reply goes to him on Telegram.
+    private var ciFixing: [String: (asked: Date, sawWorking: Bool, pr: String)] = [:]
+
+    private func followCIFixes(_ states: [String: Orca.AgentState]) async {
+        for (id, f) in ciFixing {
+            guard let a = states[id] else {
+                if Date().timeIntervalSince(f.asked) > 7200 { ciFixing[id] = nil }
+                continue
+            }
+            if a.state == "working" || a.state == "monitoring" { ciFixing[id]?.sawWorking = true; continue }
+            guard f.sawWorking || Date().timeIntervalSince(f.asked) > 600 else { continue }
+            ciFixing[id] = nil
+            let tag = watchedCards.first { $0.id == id }?.tag ?? ""
+            let said = a.lastMessage.isEmpty ? "It stopped without saying anything." : String(a.lastMessage.suffix(700))
+            await Notify.send("🔧 \(id) (\(tag)), CI red on \(f.pr)" + (a.state == "blocked" ? ": it is waiting for you" : "") + "\n\n\(said)")
+        }
+    }
+
+    func dismissNews(_ id: String) {
+        watchNews[id] = nil
+        Database.shared.setValue("watch.news", watchNews)
+    }
+
+    /// Looks for what is new on each waiting card and wakes its agent with it. See `Watch`.
+    func checkWatched(slack: Bool) async {
+        guard !watchingNow, let key = Database.shared.secret("linearApiKey") else { return }
+        watchingNow = true
+        defer { watchingNow = false; watchChecked = Date() }
+        let cards = watchedCards
+        var seenAll = Database.shared.value("watch.seen", as: [String: Watch.Seen].self) ?? [:]
+        // A card that left the column is forgotten: when it comes back, it starts from that moment.
+        seenAll = seenAll.filter { id, _ in cards.contains { $0.id == id } }
+        for card in cards {
+            let first = seenAll[card.id] == nil
+            var seen = seenAll[card.id] ?? Watch.Seen(since: Watch.now())
+            // Each source keeps its own mark, moved only when it was read: a source that fails is read again from the
+            // same point next time, so nothing that arrived meanwhile is lost (11-nov).
+            var marks = seen.sources ?? [:]
+            func since(_ k: String) -> String { marks[k] ?? seen.since }
+            let startedAt = Watch.now()
+            var failed: [String] = []
+            var events: [Watch.Event] = []
+            let activity = try? await Linear.activity(key: key, id: card.id)
+            if let activity {
+                for c in activity.comments.nodes where Watch.after(c.createdAt, since("linear")) {
+                    // Integrations write without a person: those are not someone answering.
+                    guard let u = c.user, u.isMe != true else { continue }
+                    events.append(Watch.Event(when: c.createdAt, source: "Linear", what: "\(u.name) commented" + Watch.snippet(c.body)))
+                }
+                marks["linear"] = startedAt
+            } else { failed.append("Linear") }
+            var texts = [activity?.description ?? card.description]
+            texts += activity?.comments.nodes.map(\.body) ?? []
+            texts += activity?.attachments.nodes.map(\.url) ?? card.pullRequests.map(\.url.absoluteString)
+            let links = Watch.links(in: texts)
+            for pr in links.prs {
+                let k = "\(pr.repo)#\(pr.number)"
+                guard let r = await Watch.pullRequest(repo: pr.repo, number: pr.number, since: since("pr " + k), before: seen.prs[k],
+                                                     inReview: card.column == .inReview) else { failed.append("GitHub #\(pr.number)"); continue }
+                events += r.events
+                seen.prs[k] = r.now
+                marks["pr " + k] = startedAt
+            }
+            for d in links.discussions {
+                let k = "discussion \(d.repo)#\(d.number)"
+                guard let found = await Watch.discussion(repo: d.repo, number: d.number, since: since(k)) else { failed.append("discussion #\(d.number)"); continue }
+                events += found
+                marks[k] = startedAt
+            }
+            if slack, !links.slack.isEmpty {
+                let from = seen.slackSince ?? seen.since
+                if let run = try? await Agents.run(.slackNews(threads: links.slack, since: from)),
+                   let result = try? JSONDecoder().decode(SlackNewsResult.self, from: Data(run.resultJSON.utf8)) {
+                    for m in result.messages where Watch.after(m.when, from) {
+                        events.append(Watch.Event(when: m.when, source: "Slack", what: "\(m.author): \"\(m.text)\""))
+                    }
+                    seen.slackSince = startedAt
+                } else { failed.append("Slack") }
+            }
+            // The first look only marks where it starts: what was there before is not news.
+            // A red CI on a card in review is the exception: it needs fixing however long it has been red.
+            if first { events = events.filter { $0.ciFailed == true } }
+            seen.sources = marks
+            watchStatus[card.id] = Watch.Status(at: Date(), failed: failed,
+                                                sources: 1 + links.prs.count + links.discussions.count + (links.slack.isEmpty ? 0 : 1),
+                                                slackLinked: !links.slack.isEmpty)
+            seenAll[card.id] = seen
+            guard !events.isEmpty else { continue }
+            // In review with a red CI: its agent tries to fix it, a few times at most per pull request.
+            let red = events.filter { $0.ciFailed == true }.map(\.source)
+            var fixes = seen.ciFixes ?? [:]
+            let fix = card.column == .inReview && !red.isEmpty && red.allSatisfy { (fixes[$0] ?? 0) < Watch.maxCIFixes }
+            var agent = "no agent"
+            if events.allSatisfy({ $0.quiet == true }) { agent = "shown only" }
+            else if let a = agentStates[card.id], let handle = a.terminal {
+                // An agent stopped on a permission prompt is not typed into: a key could answer the prompt.
+                if a.state == "blocked" { agent = "agent waiting on a prompt" }
+                else if await Orca.send(terminal: handle, text: fix ? Watch.fixMessage(card.id, events) : Watch.wakeMessage(card.id, events)) {
+                    agent = fix ? "agent fixing the CI" : "woken"
+                    if fix {
+                        for r in red { fixes[r, default: 0] += 1 }
+                        ciFixing[card.id] = (Date(), false, red.joined(separator: ", ").replacingOccurrences(of: "GitHub ", with: ""))
+                    }
+                } else { agent = "could not reach the agent" }
+            }
+            seen.ciFixes = fixes
+            seenAll[card.id] = seen
+            if !red.isEmpty, card.column == .inReview, agent != "agent fixing the CI" {
+                let why = !fix ? "it already tried \(Watch.maxCIFixes) times" : agent
+                await Notify.send("🔴 \(card.id) (\(card.tag)): CI red on " + red.joined(separator: ", ").replacingOccurrences(of: "GitHub ", with: "") + ", not fixed automatically: \(why).")
+            }
+            var news = watchNews[card.id] ?? Watch.News(events: [], at: Date(), agent: agent)
+            news.events += events
+            news.at = Date()
+            news.agent = agent
+            watchNews[card.id] = news
+        }
+        Database.shared.setValue("watch.seen", seenAll)
+        Database.shared.setValue("watch.news", watchNews)
+    }
+
     @Published var prStatus: [Int: GitHub.Status] = [:]
+
+    // Reviews: pull requests waiting for his review, and the review prepared for each. See docs/reviews.md.
+    @Published var reviewRequests: [ReviewRequest] = []
+    @Published var reviews: [Int: PRReview] = Store.savedReviews()
+    @Published var reviewSteps: [Int: String] = [:]
+    @Published var reviewBusy: Set<Int> = []
+    @Published var reviewNotice: [Int: String] = [:]
+    @Published var reviewOpen: Int?
+    @Published var reviewsError: String?
     @Published var error: String?
     @Published var loading = false
     @Published var lastRefresh: Date?
@@ -323,7 +592,25 @@ final class Store: ObservableObject {
     func start() {
         guard timer == nil else { return }
         timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in Task { await self?.refresh() } }
-        agentTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { [weak self] _ in Task { await self?.refreshAgents() } }
+        agentTimer = Timer.scheduledTimer(withTimeInterval: 8, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                await self?.refreshAgents()
+                // While the morning is open, the auditor's sweep is followed too.
+                if self?.morningOpen == true { await self?.loadAuditor() }
+            }
+        }
+        watchTimer = Timer.scheduledTimer(withTimeInterval: Watch.interval, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.watchTick += 1
+                await self.checkWatched(slack: self.watchTick % Watch.slackEvery == 0)
+            }
+        }
+        // A first look once the board has loaded, so a card starts being watched right away.
+        Task { @MainActor in
+            try? await Task.sleep(for: .seconds(30))
+            await self.checkWatched(slack: true)
+        }
         observer = NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             Task { await self?.refresh() }
         }
@@ -331,15 +618,32 @@ final class Store: ObservableObject {
         Task { await refresh() }
     }
 
+    private var refreshAgain = false
+
+    /// Reads everything again. Asked while a refresh runs, it does not drop the request: the running one goes round once
+    /// more when it ends, and the caller waits for that, so it sees what changed after it asked. A dragged card used to
+    /// jump back because its refresh was dropped while an older one, read before the write, was still finishing (9-nov).
     func refresh() async {
-        if loading { return }
+        if loading {
+            refreshAgain = true
+            while loading { try? await Task.sleep(for: .milliseconds(150)) }
+            return
+        }
         loading = true
-        defer { loading = false }
+        repeat {
+            refreshAgain = false
+            await load()
+        } while refreshAgain
+        loading = false
+    }
+
+    private func load() async {
         do {
             guard let key = Database.shared.secret("linearApiKey") else {
                 throw QuicksaveError.message("Add your Linear API key in Settings (⌘,).")
             }
             await refreshInbox(key: key)
+            await refreshReviews()
             let board = try await Linear.openMainQuests(key: key)
             let open = board.quests
             stateColors = board.stateColors
@@ -347,8 +651,11 @@ final class Store: ObservableObject {
             error = open.count > 1 ? "\(open.count) Main Quests are open. Only one should be." : nil
             lastRefresh = Date()
             await refreshQueue(key: key)
-            // Pieces and side quests alike: their Orca worktree and their pull requests' live state.
-            let all = (quest?.pieces ?? []) + sideQuests
+            await refreshContract(key: key)
+            await checkRituals(key: key)
+            await refreshLoose(key: key)
+            // Pieces, side quests and open worktrees alike: their Orca worktree and their pull requests' live state.
+            let all = (quest?.pieces ?? []) + sideQuests + looseWork
             var found: [String: Orca.Match] = [:]
             for piece in all { if let m = await Orca.worktree(for: piece.id) { found[piece.id] = m } }
             worktrees = found
@@ -364,6 +671,113 @@ final class Store: ObservableObject {
         }
     }
 
+    // MARK: Tuesday rituals
+
+    @Published var ritualsRunning: Set<Ritual> = []
+    @Published var ritualNotes: [Ritual: String] = [:]
+    /// When each ritual was posted since the last Tuesday. Read from Linear on every refresh, and from Slack for the SFA.
+    @Published var ritualPosted: [Ritual: Date] = Ritual.postedSaved()
+    /// Projects he leads with no status update since Tuesday.
+    @Published var ritualMissing: [String] = []
+    /// The card waits for the first look, so it does not flash for something already posted.
+    @Published var ritualsKnown = false
+    @Published var sfaChecking = false
+    /// This week's posted SFA, so the Previously reply is drafted into its thread.
+    var sfaLink: String? {
+        get {
+            guard let s = Database.shared.value("ritual.sfaLink", as: [String: String].self),
+                  s["week"] == ISO8601DateFormatter().string(from: Ritual.tuesday) else { return nil }
+            return s["link"]
+        }
+        set {
+            Database.shared.setValue("ritual.sfaLink", newValue.map { ["week": ISO8601DateFormatter().string(from: Ritual.tuesday), "link": $0] })
+        }
+    }
+    private var sfaLookedAt: Date?
+
+    func markPosted(_ r: Ritual) {
+        ritualPosted[r] = Date()
+        Ritual.savePosted(ritualPosted)
+    }
+
+    private func checkRituals(key: String) async {
+        let since = Ritual.tuesday
+        var posted = Ritual.postedSaved()
+        if let projects = try? await Linear.ledProjectUpdates(key: key) {
+            let missing = projects.filter { ($0.last ?? .distantPast) < since }
+            ritualMissing = missing.map(\.name)
+            if missing.isEmpty, let last = projects.compactMap(\.last).max() { posted[.projectUpdates] = posted[.projectUpdates] ?? last }
+        }
+        if posted[.initiativeUpdate] == nil, let d = try? await Linear.myInitiativeUpdate(key: key, since: since) { posted[.initiativeUpdate] = d }
+        ritualPosted = posted
+        Ritual.savePosted(posted)
+        ritualsKnown = true
+        // Slack costs a small agent: at most every 30 minutes, and only while the SFA is missing.
+        if posted[.sfa] == nil || posted[.previously] == nil, !sfaChecking, Date().timeIntervalSince(sfaLookedAt ?? .distantPast) > 1800 {
+            sfaLookedAt = Date()
+            sfaChecking = true
+            Task { @MainActor in
+                defer { sfaChecking = false }
+                guard let run = try? await Agents.run(.sfaPosted(since: since)),
+                      let r = try? JSONDecoder().decode(SFAPostedResult.self, from: Data(run.resultJSON.utf8)), r.posted else { return }
+                if ritualPosted[.sfa] == nil { ritualPosted[.sfa] = r.when.flatMap { QSDate.parse($0) } ?? Date() }
+                if r.previously == true, ritualPosted[.previously] == nil {
+                    ritualPosted[.previously] = r.previouslyWhen.flatMap { QSDate.parse($0) } ?? Date()
+                }
+                if let link = r.link, !link.isEmpty { sfaLink = link }
+                Ritual.savePosted(ritualPosted)
+            }
+        }
+    }
+
+    /// What he wrote for each ritual before drafting it. Kept until the next Tuesday, so it survives closing the app.
+    @Published var ritualInput: [Ritual: String] = {
+        guard let saved = Database.shared.value("ritual.input", as: [String: String].self),
+              saved["week"] == ISO8601DateFormatter().string(from: Ritual.tuesday) else { return [:] }
+        return Dictionary(uniqueKeysWithValues: Ritual.allCases.compactMap { r in saved[r.rawValue].map { (r, $0) } })
+    }()
+
+    func setRitualInput(_ r: Ritual, _ text: String) {
+        ritualInput[r] = text
+        var saved = Dictionary(uniqueKeysWithValues: ritualInput.map { ($0.key.rawValue, $0.value) })
+        saved["week"] = ISO8601DateFormatter().string(from: Ritual.tuesday)
+        Database.shared.setValue("ritual.input", saved)
+    }
+
+    /// Drafts one of Tuesday's rituals with an agent; the drafts land in Drafts.
+    func draftRitual(_ r: Ritual) async {
+        guard !ritualsRunning.contains(r) else { return }
+        ritualsRunning.insert(r)
+        ritualNotes[r] = nil
+        defer { ritualsRunning.remove(r) }
+        do {
+            let projects = Ritual.projectUpdates.draftsToday(drafts + archivedDrafts)
+            let run = try await Agents.run(.ritual(r, projectDrafts: r == .initiativeUpdate ? projects : [],
+                                                  input: (ritualInput[r] ?? "").trimmingCharacters(in: .whitespacesAndNewlines),
+                                                  sfaLink: r == .previously ? sfaLink : nil))
+            let result = try JSONDecoder().decode(RitualResult.self, from: Data(run.resultJSON.utf8))
+            for d in result.drafts {
+                Database.shared.addDraft(place: d.place, note: d.note ?? r.title, link: d.link, body: d.text, source: r.rawValue, item: nil,
+                                         session: run.sessionId, sessionDir: NSHomeDirectory() + "/vault")
+            }
+            loadDrafts()
+            if result.drafts.isEmpty { ritualNotes[r] = "No draft came back. " + (result.notes ?? "") }
+            else if let n = result.notes, !n.isEmpty { ritualNotes[r] = n }
+        } catch {
+            ritualNotes[r] = "It could not be drafted: \(error.localizedDescription)"
+        }
+    }
+
+    /// The week's contract from the vault, and the live state of the issues its objectives name.
+    @Published var contract: WeeklyContract?
+    @Published var contractIssues: [String: Linear.QueueIssue] = [:]
+
+    private func refreshContract(key: String) async {
+        contract = WeeklyContract.newest()
+        guard let ids = contract?.allIssues, !ids.isEmpty, let found = try? await Linear.issues(key: key, ids: ids) else { return }
+        contractIssues = Dictionary(found.map { ($0.identifier, $0) }, uniquingKeysWith: { a, _ in a })
+    }
+
     private func refreshQueue(key: String) async {
         let plan = quest?.sideQuestPlan ?? []
         if let issues = try? await Linear.pieces(key: key, ids: plan.map(\.id)) {
@@ -372,6 +786,33 @@ final class Store: ObservableObject {
             }
         }
         if let found = try? await Linear.myOpenIssues(key: key, label: "collectible") { collectibles = QueueOrder.sorted(found) }
+    }
+
+    /// Every open worktree whose issue is not the Main Quest, one of its pieces or a side quest of today.
+    private func refreshLoose(key: String) async {
+        let open = await Orca.openWorktrees()
+        var taken = Set(sideQuests.map(\.id) + (quest?.pieces.map(\.id) ?? []))
+        if let q = quest { taken.insert(q.identifier) }
+        strayWorktrees = open.filter { $0.issue == nil }
+        let byIssue = Dictionary(grouping: open.filter { $0.issue != nil && !taken.contains($0.issue!) }, by: { $0.issue! })
+        guard !byIssue.isEmpty, let issues = try? await Linear.pieces(key: key, ids: byIssue.keys.sorted()) else {
+            if byIssue.isEmpty { looseWork = [] }
+            return
+        }
+        looseWork = issues.enumerated().map { i, issue in
+            var p = Piece.from(issue, order: 100 + i, tag: "", step: byIssue[issue.identifier]?.first(where: { !$0.comment.isEmpty })?.comment ?? "", isSide: true)
+            p.openIn = byIssue[issue.identifier] ?? []
+            return p
+        }
+    }
+
+    /// Makes an open worktree's issue a side quest of today.
+    func addLooseToToday(_ id: String) async {
+        guard let key = Database.shared.secret("linearApiKey"), let issue = try? await Linear.issues(key: key, ids: [id]).first else {
+            planNotice = "\(id) could not be read from Linear."
+            return
+        }
+        await addToToday(issue)
     }
 
     /// His open issues that could join today: not the Main Quest, its pieces, today's side quests or collectibles.
@@ -384,6 +825,24 @@ final class Store: ObservableObject {
 
     func addToToday(_ issue: Linear.QueueIssue) async {
         await changePlan(issue.identifier) { SideQuestPlan.adding(issue, to: $0) }
+    }
+
+    /// Cards dragged to another column, by issue, while Linear is being told.
+    @Published var moving: [String: Column] = [:]
+    @Published var moveNotice: String?
+
+    /// Moves an issue to a column's state in Linear, from a card dragged on the board.
+    func move(_ id: String, to column: Column) async {
+        guard moving[id] == nil else { return }
+        moving[id] = column
+        moveNotice = nil
+        do {
+            try await InboxWrites.setState(id, column.rawValue)
+            await refresh()
+        } catch {
+            moveNotice = "\(id) could not move to \(column.rawValue): \(error.localizedDescription)"
+        }
+        moving[id] = nil
     }
 
     func removeFromToday(_ id: String) async {
@@ -434,6 +893,25 @@ final class Store: ObservableObject {
         switch card {
         case .pullRequest:
             Database.shared.setPRDecision(card.id, decision.prRaw)
+        case .expired(let item):
+            if case .instruct(let text) = decision {
+                // An agent carries it out; it cannot be undone from here.
+                stack.removeAll { $0.card.id == item.id }
+                writing.insert(item.id)
+                Task { await instruct(item, text) }
+                return
+            }
+            writing.insert(item.id)
+            enqueue { [self] in
+                do {
+                    try await InboxWrites.write(decision, for: item)
+                } catch {
+                    decisions[item.id] = nil
+                    stack.removeAll { $0.card.id == item.id }
+                    inboxNotice = "\(item.id) could not be saved, so its card is back: \(error.localizedDescription)"
+                }
+                writing.remove(item.id)
+            }
         case .triage(let item):
             writing.insert(item.id)
             enqueue { [self] in
@@ -450,6 +928,30 @@ final class Store: ObservableObject {
         }
     }
 
+    /// What came back from the agents carrying out his instructions, newest first.
+    @Published var instructionResults: [String] = []
+
+    private func instruct(_ item: ExpiredItem, _ text: String) async {
+        defer { writing.remove(item.id) }
+        do {
+            let run = try await Agents.run(.issueInstruction(id: item.id, title: item.issue.title, url: item.issue.url, instruction: text))
+            let result = try JSONDecoder().decode(InstructionResult.self, from: Data(run.resultJSON.utf8))
+            for d in result.drafts ?? [] {
+                Database.shared.addDraft(place: d.place, note: d.note ?? "", link: d.link, body: d.text, source: "Inbox instruction", item: item.id)
+            }
+            if !(result.drafts ?? []).isEmpty { loadDrafts() }
+            let drafts = (result.drafts ?? []).isEmpty ? "" : " Drafts: \(result.drafts!.count)."
+            instructionResults.insert("\(item.id): \(result.summary)\(drafts)", at: 0)
+            if result.outcome != "done" {
+                decisions[item.id] = nil
+                inboxNotice = "\(item.id) needs you: \(result.summary)"
+            }
+        } catch {
+            decisions[item.id] = nil
+            inboxNotice = "\(item.id) could not be done, so its card is back: \(error.localizedDescription)"
+        }
+    }
+
     func later(_ card: InboxCard) {
         deferred.removeAll { $0 == card.id }
         deferred.append(card.id)
@@ -463,6 +965,19 @@ final class Store: ObservableObject {
         case .pullRequest:
             decisions[last.card.id] = nil
             Database.shared.setPRDecision(last.card.id, nil)
+        case .expired(let item):
+            writing.insert(item.id)
+            enqueue { [self] in
+                do {
+                    try await InboxWrites.undo(item)
+                    decisions[item.id] = nil
+                    if !inbox.contains(where: { $0.id == item.id }) { inbox.insert(last.card, at: 0) }
+                } catch {
+                    stack.append(last)
+                    inboxNotice = "\(item.id) could not be put back: \(error.localizedDescription)"
+                }
+                writing.remove(item.id)
+            }
         case .triage(let item):
             writing.insert(item.id)
             enqueue { [self] in
@@ -616,6 +1131,9 @@ final class Store: ObservableObject {
         var problems: [String] = []
         do { cards += try await Linear.auditorTriage(key: key).map { .triage(TriageItem($0)) } }
         catch { problems.append("Triage: \(error.localizedDescription)") }
+        // His issues whose date has passed go first: the morning plans from what he still means to do.
+        do { cards += try await ExpiredItem.load(key: key).map { .expired($0) } }
+        catch { problems.append("Overdue issues: \(error.localizedDescription)") }
         let prs = await GitHub.vaultPullRequests()
         if let prs { cards += prs.map { .pullRequest($0) } }
         else { problems.append("Vault pull requests could not be read (is gh logged in?)") }

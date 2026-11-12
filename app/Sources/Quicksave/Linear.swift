@@ -243,6 +243,179 @@ enum Linear {
         return env.data?.issue
     }
 
+    /// An open issue as the morning weighs it: his own, or one in a project he leads.
+    struct WorkIssue: Decodable, Identifiable, Hashable {
+        struct State: Decodable, Hashable { let name: String; let type: String }
+        struct Named: Decodable, Hashable { let name: String }
+        struct Labels: Decodable, Hashable { let nodes: [Named] }
+        struct Person: Decodable, Hashable { let name: String; let isMe: Bool? }
+        let identifier: String
+        let title: String
+        let url: String
+        let dueDate: String?
+        /// 0 none, 1 urgent, 2 high, 3 medium, 4 low.
+        let priority: Int?
+        let updatedAt: String?
+        let state: State
+        let labels: Labels?
+        let project: Named?
+        let assignee: Person?
+        var id: String { identifier }
+        var labelNames: [String] { (labels?.nodes ?? []).map(\.name) }
+        var isOpen: Bool { !["completed", "canceled", "triage"].contains(state.type) && state.name != "Duplicate" }
+        var priorityName: String { ["no priority", "urgent", "high", "medium", "low"][min(max(priority ?? 0, 0), 4)] }
+    }
+
+    /// What an expired card shows beyond the list: the description, and how many times its due date was pushed later.
+    struct IssueHistory: Decodable {
+        struct Change: Decodable { let fromDueDate: String?; let toDueDate: String? }
+        struct Changes: Decodable { let nodes: [Change] }
+        let description: String?
+        let history: Changes?
+        var postpones: Int {
+            (history?.nodes ?? []).filter { c in
+                guard let from = c.fromDueDate, let to = c.toDueDate else { return false }
+                return to > from
+            }.count
+        }
+    }
+
+    private static let workFields = "identifier title url dueDate priority updatedAt state { name type } labels { nodes { name } } project { name } assignee { name isMe }"
+
+    /// Every open issue assigned to him, every team.
+    static func myWork(key: String) async throws -> [WorkIssue] {
+        let query = """
+        query { issues(first: 250, filter: {
+          assignee: { isMe: { eq: true } }, state: { type: { nin: ["completed", "canceled"] } }
+        }) { nodes { \(workFields) } } }
+        """
+        let data = try await send(query, key: key)
+        struct Envelope: Decodable {
+            struct DataPart: Decodable { struct Issues: Decodable { let nodes: [WorkIssue] }; let issues: Issues }
+            let data: DataPart?
+            let errors: [GQLError]?
+        }
+        let env = try JSONDecoder().decode(Envelope.self, from: data)
+        if let e = env.errors?.first { throw QuicksaveError.message("Linear: \(e.message)") }
+        return (env.data?.issues.nodes ?? []).filter(\.isOpen)
+    }
+
+    /// Descriptions and due-date history, by code, in one request.
+    static func histories(key: String, ids: [String]) async throws -> [String: IssueHistory] {
+        guard !ids.isEmpty else { return [:] }
+        let parts = ids.enumerated().map { i, id in "i\(i): issue(id: \"\(id)\") { description history(first: 50) { nodes { fromDueDate toDueDate } } }" }
+        let data = try await send("query { \(parts.joined(separator: "\n")) }", key: key)
+        struct Envelope: Decodable { let data: [String: IssueHistory?]? }
+        let found = (try JSONDecoder().decode(Envelope.self, from: data)).data ?? [:]
+        var out: [String: IssueHistory] = [:]
+        for (i, id) in ids.enumerated() { if let h = found["i\(i)"] ?? nil { out[id] = h } }
+        return out
+    }
+
+    /// The open issues of the projects he leads that are not assigned to him, by project. The Auditor project is left
+    /// out: its items reach him through the inbox.
+    /// Only issues in the window (due by `until`, urgent or high, in progress or in review) are asked for: the whole
+    /// projects are too big for one Linear query.
+    static func projectWork(key: String, until: String) async throws -> [(project: String, issues: [WorkIssue])] {
+        let query = """
+        query { projects(first: 10, filter: {
+          lead: { isMe: { eq: true } }, status: { type: { nin: ["completed", "canceled"] } }
+        }) { nodes { id name issues(first: 40, filter: {
+          state: { type: { nin: ["completed", "canceled"] } },
+          or: [{ dueDate: { lte: "\(until)" } }, { priority: { in: [1, 2] } }, { state: { name: { in: ["In Progress", "In Review"] } } }]
+        }) { nodes { \(workFields) } } } } }
+        """
+        let data = try await send(query, key: key)
+        struct Envelope: Decodable {
+            struct DataPart: Decodable {
+                struct Project: Decodable { struct Issues: Decodable { let nodes: [WorkIssue] }; let id: String; let name: String; let issues: Issues }
+                struct Projects: Decodable { let nodes: [Project] }
+                let projects: Projects
+            }
+            let data: DataPart?
+            let errors: [GQLError]?
+        }
+        let env = try JSONDecoder().decode(Envelope.self, from: data)
+        if let e = env.errors?.first { throw QuicksaveError.message("Linear: \(e.message)") }
+        return (env.data?.projects.nodes ?? []).filter { $0.id != auditorProjectId }.map { p in
+            (p.name, p.issues.nodes.filter { $0.isOpen && $0.assignee?.isMe != true })
+        }.filter { !$0.issues.isEmpty }
+    }
+
+    /// What a watched card reads of its issue: comments, description and attachments, to find what is new and where
+    /// else the conversation goes on (pull requests, discussions, Slack threads).
+    struct Activity: Decodable {
+        struct Comment: Decodable {
+            struct User: Decodable { let name: String; let isMe: Bool? }
+            struct Bot: Decodable { let name: String? }
+            let body: String
+            let createdAt: String
+            let user: User?
+            let botActor: Bot?
+        }
+        struct Comments: Decodable { let nodes: [Comment] }
+        struct Attachment: Decodable { let url: String }
+        struct Attachments: Decodable { let nodes: [Attachment] }
+        let description: String?
+        let comments: Comments
+        let attachments: Attachments
+    }
+
+    static func activity(key: String, id: String) async throws -> Activity? {
+        let query = """
+        query { issue(id: "\(id)") {
+          description comments(last: 40) { nodes { body createdAt user { name isMe } botActor { name } } }
+          attachments { nodes { url } }
+        } }
+        """
+        let data = try await send(query, key: key)
+        struct Envelope: Decodable { struct DataPart: Decodable { let issue: Activity? }; let data: DataPart? }
+        return try JSONDecoder().decode(Envelope.self, from: data).data?.issue
+    }
+
+    /// The projects he leads, planned or under way (his crew projects sit in Planned), that belong to an initiative, with when each got its last status update.
+    static func ledProjectUpdates(key: String) async throws -> [(name: String, last: Date?)] {
+        let query = """
+        query { projects(first: 30, filter: { lead: { isMe: { eq: true } }, status: { type: { in: ["planned", "started"] } } }) {
+          nodes { id name lastUpdate { createdAt } initiatives { nodes { id } } } } }
+        """
+        let data = try await send(query, key: key)
+        struct Envelope: Decodable {
+            struct DataPart: Decodable {
+                struct P: Decodable {
+                    struct U: Decodable { let createdAt: String }
+                    struct I: Decodable { struct N: Decodable { let id: String }; let nodes: [N] }
+                    let id: String; let name: String; let lastUpdate: U?; let initiatives: I?
+                }
+                struct Ps: Decodable { let nodes: [P] }
+                let projects: Ps
+            }
+            let data: DataPart?
+            let errors: [GQLError]?
+        }
+        let env = try JSONDecoder().decode(Envelope.self, from: data)
+        if let e = env.errors?.first { throw QuicksaveError.message("Linear: \(e.message)") }
+        // Only projects under an initiative get a weekly update: his own TEMI projects (Quicksave, Auditor) never do (11-nov).
+        return (env.data?.projects.nodes ?? []).filter { $0.id != auditorProjectId && !($0.initiatives?.nodes.isEmpty ?? true) }.map { ($0.name, $0.lastUpdate.flatMap { QSDate.parse($0.createdAt) }) }
+    }
+
+    /// When he last posted an initiative update since `since`, if he did.
+    static func myInitiativeUpdate(key: String, since: Date) async throws -> Date? {
+        let iso = ISO8601DateFormatter().string(from: since)
+        let query = """
+        query { initiativeUpdates(first: 5, filter: { createdAt: { gte: "\(iso)" }, user: { isMe: { eq: true } } }) { nodes { createdAt } } }
+        """
+        let data = try await send(query, key: key)
+        struct Envelope: Decodable {
+            struct DataPart: Decodable { struct U: Decodable { let createdAt: String }; struct Us: Decodable { let nodes: [U] }; let initiativeUpdates: Us }
+            let data: DataPart?
+            let errors: [GQLError]?
+        }
+        let env = try JSONDecoder().decode(Envelope.self, from: data)
+        if let e = env.errors?.first { throw QuicksaveError.message("Linear: \(e.message)") }
+        return (env.data?.initiativeUpdates.nodes ?? []).compactMap { QSDate.parse($0.createdAt) }.max()
+    }
+
     private static func send(_ query: String, key: String) async throws -> Data {
         var req = URLRequest(url: URL(string: "https://api.linear.app/graphql")!)
         req.httpMethod = "POST"

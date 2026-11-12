@@ -179,16 +179,131 @@ struct SideQuestsSection: View {
                 }
             }
             if let notice = store.planNotice { QSNote(text: notice, icon: "exclamationmark.triangle", warning: true) }
-            if store.quest == nil {
+            if store.quest == nil && store.looseWork.isEmpty {
                 QSPlaceholder(text: "Side quests come with the day's plan.")
-            } else if store.sideQuests.isEmpty {
+            } else if store.sideQuests.isEmpty && store.looseWork.isEmpty {
                 QSPlaceholder(text: "Nothing else today. Add one if something fits.")
             } else {
-                StateBoard(store: store, items: store.sideQuests, column: \.column) { piece in
+                // Today's side quests, and with them, dashed, the issues open in an Orca worktree that are not planned.
+                StateBoard(store: store, items: store.sideQuests + store.looseWork) { piece in
                     PieceCard(piece: piece, store: store) { Task { await store.removeFromToday(piece.id) } }
                 }
             }
+            if !store.unlinkedAgents.isEmpty || !strayWithoutAgent.isEmpty { noIssue }
         }
+    }
+}
+
+extension SideQuestsSection {
+    /// Worktrees with no issue whose agent, if any, is not already shown as an agent card.
+    var strayWithoutAgent: [Orca.OpenWorktree] {
+        let withAgent = Set(store.unlinkedAgents.map(\.worktreeId))
+        return store.strayWorktrees.filter { !withAgent.contains($0.id) }
+    }
+
+    /// Everything open in Orca that no Linear issue names: every live agent, and worktrees with no agent. No state to
+    /// place them by, so they sit apart below the board, as small cards painted like any agent's.
+    var noIssue: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            HStack(spacing: Theme.Space.s) {
+                QSLabel("Open with no issue", icon: "questionmark.folder")
+                Text("\(store.unlinkedAgents.count + strayWithoutAgent.count)")
+                    .font(Theme.Text.number).foregroundStyle(Theme.Palette.textSecondary)
+            }
+            .help("Agents and worktrees open in Orca that no Linear issue names. Name one after its issue (\"ES-123 — …\") and it moves to the board.")
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 230), spacing: Theme.Space.m, alignment: .topLeading)], alignment: .leading, spacing: Theme.Space.m) {
+                ForEach(store.unlinkedAgents, id: \.key) { a in UnlinkedAgentCard(agent: a, store: store) }
+                ForEach(strayWithoutAgent) { w in StrayWorktreeCard(worktree: w) }
+            }
+        }
+    }
+}
+
+/// A live agent no issue names, on the same card as the board's: painted with its state, its name, where it runs and
+/// its last words. Hovering shows the Orca and close buttons and its last reply; a click opens the detail with the
+/// reply in full.
+struct UnlinkedAgentCard: View {
+    let agent: Orca.AgentState
+    @ObservedObject var store: Store
+    @State private var hovering = false
+    @State private var showDetail = false
+
+    var body: some View {
+        QSCard(tint: agent.tint, pulsing: agent.state == "working", blinking: agent.state == "blocked", dashed: true, content: {
+            QSFlow { QSAgentTag(agent: agent) }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .topTrailing) {
+                    QSHoverActions(visible: hovering) {
+                        OrcaButton(worktree: agent.match)
+                        CloseAgentButton(agent: agent, store: store)
+                    }
+                }
+            Text(agent.name.isEmpty ? "Unnamed agent" : agent.name)
+                .font(Theme.Text.cardTitle).fixedSize(horizontal: false, vertical: true)
+            Text(agent.place).font(Theme.Text.micro).foregroundStyle(Theme.Palette.textTertiary).lineLimit(1)
+            if !agent.lastMessage.isEmpty {
+                Text(agent.lastMessage.split(separator: "\n").first.map(String.init) ?? "")
+                    .font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary).lineLimit(3)
+            }
+        }, onHoverChange: { hovering = $0 })
+        .help(agent.lastMessage.isEmpty ? agent.name : "Agent: " + String(agent.lastMessage.prefix(300)))
+        .onTapGesture { showDetail = true }
+        .popover(isPresented: $showDetail, arrowEdge: .bottom) {
+            ScrollView { UnlinkedAgentDetail(agent: agent, store: store) }
+                .padding(Theme.Space.xl)
+                .frame(width: Theme.Size.popoverWidth)
+                .frame(maxHeight: Theme.Size.popoverMaxHeight)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+/// The detail of an agent no issue names: there is no issue to read, so it is the agent itself, with its last
+/// reply in full.
+struct UnlinkedAgentDetail: View {
+    let agent: Orca.AgentState
+    @ObservedObject var store: Store
+    @State private var orcaError: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Theme.Space.m) {
+            HStack(spacing: Theme.Space.s) {
+                QSTag(text: "No issue", icon: "questionmark.folder", color: Theme.Palette.textTertiary).fixedSize()
+                Spacer()
+                OrcaButton(worktree: agent.match, onError: { orcaError = $0 })
+                CloseAgentButton(agent: agent, store: store)
+            }
+            Text(agent.name.isEmpty ? "Unnamed agent" : agent.name).font(Theme.Text.heroTitle).fixedSize(horizontal: false, vertical: true)
+            AgentReplyBox(agent: agent, showPlace: true)
+            Text("Name it after its issue (\"ES-123 — …\") and it moves to the board.")
+                .font(Theme.Text.micro).foregroundStyle(Theme.Palette.textTertiary)
+            if let orcaError { Text(orcaError).font(Theme.Text.meta).foregroundStyle(Theme.Palette.warning) }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// A worktree no issue names and with no live agent, on the same card as the board's: it can probably be closed.
+/// A click goes to it in Orca.
+struct StrayWorktreeCard: View {
+    let worktree: Orca.OpenWorktree
+    @State private var hovering = false
+
+    var body: some View {
+        QSCard(dashed: true, content: {
+            QSFlow { QSTag(text: "No agent", icon: "arrow.triangle.branch", color: Theme.Palette.textTertiary).fixedSize() }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(alignment: .topTrailing) {
+                    QSHoverActions(visible: hovering) { OrcaButton(worktree: worktree.match) }
+                }
+            Text(worktree.name).font(Theme.Text.cardTitle).foregroundStyle(Theme.Palette.textSecondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(worktree.repo).font(Theme.Text.micro).foregroundStyle(Theme.Palette.textTertiary)
+            if !worktree.comment.isEmpty {
+                Text(worktree.comment).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary).lineLimit(3)
+            }
+        }, onHoverChange: { hovering = $0 })
+        .onTapGesture { Task { try? await Orca.go(to: worktree.match) } }
     }
 }
 

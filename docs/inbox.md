@@ -79,3 +79,11 @@ Along with approving the plan in the [morning](morning.md), this is the only par
 ## What a Triage card shows
 
 - The whole description, nothing dropped: what happened, the "Will do" highlighted, the "Why", any other section with its heading (QA, Context, Draft), and the source as written, plain text or link.
+
+## Expired issues
+
+- Every open issue of his whose due date has passed is a card too, before the rest: how many days late, its state, priority, project and description. Collectibles and the Main Quest are left out.
+- Seven decisions: **Today** (D, keeps it with today's date), **New date** (E, a calendar), **Backlog** (W, Backlog without a date), **Tell it** (R), **Later** (space), **Already done** (Q, Done) and **Cancel** (A, Canceled). Each writes at once; Undo puts back its old state and date.
+- **Tell it** takes what to do in his words ("reassign it to Gonzalo"). A background agent does it in Linear (assignee, state, date, priority, project, labels, relations, description), never comments, and returns any message to a person as a draft in Drafts. Its result shows at the top of the inbox; if it needs him, the card comes back. It cannot be undone from the app.
+- **Postpones are counted** from the issue's history in Linear: every time its due date was moved later, by anyone. After three, New date is off: it is done today, sent to the backlog, canceled or closed. The app keeps no count of its own.
+- Added on 10-nov, when three overdue issues in progress were neither planned nor discarded. With 20 overdue that day, the first pass is long; after it, only what expires each day shows up.

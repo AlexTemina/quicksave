@@ -111,11 +111,14 @@ struct VaultPullRequest: Identifiable, Hashable {
 enum InboxCard: Identifiable, Hashable {
     case triage(TriageItem)
     case pullRequest(VaultPullRequest)
+    /// One of his issues whose due date has passed.
+    case expired(ExpiredItem)
 
     var id: String {
         switch self {
         case .triage(let t): return t.id
         case .pullRequest(let p): return p.id
+        case .expired(let e): return e.id
         }
     }
 
@@ -123,6 +126,7 @@ enum InboxCard: Identifiable, Hashable {
         switch self {
         case .triage(let t): return t.created
         case .pullRequest(let p): return p.created
+        case .expired: return nil
         }
     }
 
@@ -130,6 +134,7 @@ enum InboxCard: Identifiable, Hashable {
         switch self {
         case .triage(let t): return t.id
         case .pullRequest(let p): return "#\(p.number)"
+        case .expired(let e): return e.id
         }
     }
 }
@@ -140,12 +145,16 @@ enum InboxDecision: Hashable {
     case correct(String)
     case reject
     case alreadyDone
+    /// An expired issue sent to the backlog, without a date.
+    case backlog
+    /// What to do with an expired issue, in his words; an agent carries it out.
+    case instruct(String)
 
     /// Accepting hands work to the agent; rejecting or already done does not.
     var needsAgent: Bool {
         switch self {
-        case .accept, .correct: return true
-        case .reject, .alreadyDone: return false
+        case .accept, .correct, .instruct: return true
+        case .reject, .alreadyDone, .backlog: return false
         }
     }
 
@@ -155,6 +164,8 @@ enum InboxDecision: Hashable {
         case .correct: return "Accepted with a correction"
         case .reject: return "Rejected"
         case .alreadyDone: return "Marked done"
+        case .backlog: return "Sent to the backlog"
+        case .instruct: return "Handed to an agent"
         }
     }
 
@@ -164,7 +175,7 @@ enum InboxDecision: Hashable {
         case .accept: return "accept"
         case .reject: return "reject"
         case .alreadyDone: return "done"
-        case .correct: return nil
+        case .correct, .backlog, .instruct: return nil
         }
     }
 

@@ -9,6 +9,7 @@ struct RootView: View {
             switch store.tab {
             case .today: BoardView(store: store)
             case .inbox: InboxView(store: store)
+            case .reviews: ReviewsView(store: store)
             case .drafts: DraftsView(store: store)
             }
         }
@@ -18,11 +19,12 @@ struct RootView: View {
                 Picker("", selection: $store.tab) {
                     Text("Today").tag(AppTab.today)
                     Text(store.pendingCards.isEmpty ? "Inbox" : "Inbox · \(store.pendingCards.count)").tag(AppTab.inbox)
+                    Text(store.reviewRequests.isEmpty ? "Reviews" : "Reviews · \(store.reviewRequests.count)").tag(AppTab.reviews)
                     Text(store.drafts.isEmpty ? "Drafts" : "Drafts · \(store.drafts.count)").tag(AppTab.drafts)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 330)
+                .frame(width: 440)
             }
         }
     }

@@ -15,6 +15,19 @@ struct DraftItem: Identifiable, Hashable {
     let drafted: Bool
     /// The code of the item it came from, or empty.
     let item: String
+    /// The session of the agent that wrote it, and the folder it ran in, to talk about it with that same agent.
+    var session: String? = nil
+    var sessionDir: String? = nil
+}
+
+/// One turn of the conversation about a draft. A turn with a body is a version of the text.
+struct DraftTurn: Identifiable, Hashable {
+    enum Who: String { case original, me, agent, hand, back }
+    let id: Int64
+    let who: Who
+    let text: String
+    let body: String?
+    let created: Date
 }
 
 /// A draft as it will look where it goes. Slack has no headings and shows a newline as a newline; everything else
@@ -47,6 +60,13 @@ struct SlackPreview: View {
                         .background(RoundedRectangle(cornerRadius: Theme.Radius.s).fill(Theme.Palette.well))
                 case .folded(let t): MD(t).font(Theme.Text.body)
                 case .paragraph(let t): MD(t).font(Theme.Text.body)
+                // Slack shows no tables: each row reads as it was typed.
+                case .table(let header, let rows):
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(([header] + rows).enumerated()), id: \.offset) { _, r in Text(r.joined(separator: " | ")).font(Theme.Text.body) }
+                    }
+                case .quote(let t): MD("> " + t).font(Theme.Text.body)
+                case .rule: Divider()
                 }
             }
         }
@@ -78,11 +98,10 @@ struct DraftsView: View {
     @State private var editingId: Int64?
     @State private var editText = ""
     @State private var previewing = false
-    @State private var instruction = ""
-    @State private var useContext = true
-    /// The text before the last AI rewrite, so it can be reverted.
-    @State private var previousText: String?
-    @State private var aiNote = ""
+    /// Drafts whose conversation is open.
+    @State private var talking: Set<Int64> = []
+    /// Drafts showing what the last version changed.
+    @State private var showChanges: Set<Int64> = []
 
     private var list: [DraftItem] { showArchived ? store.archivedDrafts : store.drafts }
 
@@ -106,7 +125,7 @@ struct DraftsView: View {
             }
             if !selected.isEmpty { selectionBar }
         }
-        .frame(maxWidth: Theme.Size.deckWidth)
+        .frame(maxWidth: Theme.Size.draftsWidth)
         .padding(.horizontal, Theme.Space.xl)
         .padding(.top, Theme.Space.xl).padding(.bottom, Theme.Space.xl)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -140,48 +159,93 @@ struct DraftsView: View {
         }
     }
 
-    /// Asks the AI for a change to the text being edited. The result replaces the text in the editor, nothing is saved.
-    private func aiRow(_ draft: DraftItem) -> some View {
-        let busy = store.rewritingId == draft.id
+    private static let quick = ["Shorter", "Less jargon", "More direct"]
+
+    /// The versions of a draft, numbered from 1: the first draft, then every rewrite, hand edit or step back.
+    private func versions(_ draft: DraftItem) -> [(number: Int, turn: DraftTurn)] {
+        (store.draftTurns[draft.id] ?? []).filter { $0.body != nil }.enumerated().map { ($0.offset + 1, $0.element) }
+    }
+
+    /// The conversation with the agent about one draft: his messages, its answers, and the versions it left.
+    private func thread(_ draft: DraftItem) -> some View {
+        let vs = versions(draft)
+        let busy = store.talkingIds.contains(draft.id)
+        let current = vs.last(where: { $0.turn.body == draft.body })?.number
         return VStack(alignment: .leading, spacing: Theme.Space.s) {
-            HStack(spacing: Theme.Space.s) {
-                Image(systemName: "sparkles").foregroundStyle(Theme.Palette.accent)
-                TextField("Ask the AI: shorter, friendlier, add what Bruno said…", text: $instruction)
-                    .textFieldStyle(.plain)
-                    .padding(Theme.Space.s)
-                    .background(RoundedRectangle(cornerRadius: Theme.Radius.s).fill(Theme.Palette.well))
-                    .disabled(busy)
-                    .onSubmit { Task { await rewrite(draft) } }
-                if busy { ProgressView().controlSize(.small) }
-                Button("Rewrite") { Task { await rewrite(draft) } }
-                    .buttonStyle(QSHoverStyle())
-                    .foregroundStyle(Theme.Palette.accent)
-                    .disabled(busy || instruction.trimmingCharacters(in: .whitespaces).isEmpty)
+            if vs.count > 1 {
+                HStack(spacing: Theme.Space.xs) {
+                    ForEach(vs, id: \.turn.id) { v in
+                        Button("v\(v.number)") { if v.number != current { store.restoreVersion(draft, body: v.turn.body!, number: v.number) } }
+                            .buttonStyle(QSHoverStyle())
+                            .font(Theme.Text.code)
+                            .foregroundStyle(v.number == current ? Theme.Palette.accent : Theme.Palette.textSecondary)
+                            .help(v.number == current ? "The text shown now" : "Go back to this version")
+                    }
+                    Spacer()
+                    Toggle("Show changes", isOn: Binding(get: { showChanges.contains(draft.id) },
+                                                         set: { if $0 { showChanges.insert(draft.id) } else { showChanges.remove(draft.id) } }))
+                        .toggleStyle(.checkbox).font(Theme.Text.meta)
+                }
             }
-            HStack(spacing: Theme.Space.m) {
-                Toggle("Use context", isOn: $useContext)
-                    .toggleStyle(.checkbox).font(Theme.Text.meta)
-                    .help("Lets the AI read where the draft came from: the Linear item, the Slack thread. Slower and a bit dearer; leave it off for a change of tone or length.")
-                if let previousText {
-                    Button("Revert") { editText = previousText; self.previousText = nil; aiNote = "" }
-                        .buttonStyle(QSHoverStyle()).font(Theme.Text.meta)
-                }
-                if !aiNote.isEmpty {
-                    Text(aiNote).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary).lineLimit(2)
-                }
+            QSConversation(
+                purpose: "Rewrites this draft with you. It may read where the draft came from; nothing leaves Quicksave.",
+                turns: conversationTurns(draft),
+                busy: busy,
+                step: store.talkSteps[draft.id],
+                quick: Self.quick,
+                placeholder: "Tell it what to change",
+                send: { msg in Task { await store.talk(draft, message: msg) } },
+                pendingId: store.pendingProposal(draft)?.id,
+                acceptTitle: "Use this version",
+                accept: { if let p = store.pendingProposal(draft) { store.useProposal(draft, p) } }
+            ) { text in DraftPreview(text: text, place: draft.place) }
+        }
+    }
+
+    /// The draft's conversation in the shared shape: his messages, the agent's notes with the versions it proposed,
+    /// its questions, and what happened by hand.
+    private func conversationTurns(_ draft: DraftItem) -> [QSConversationTurn] {
+        let numbers = Dictionary(uniqueKeysWithValues: versions(draft).map { ($0.turn.id, $0.number) })
+        return (store.draftTurns[draft.id] ?? []).compactMap { t in
+            switch t.who {
+            case .original: return nil
+            case .me: return QSConversationTurn(id: t.id, who: .me, text: t.text)
+            case .agent:
+                guard let body = t.body else { return QSConversationTurn(id: t.id, who: .question, text: t.text) }
+                return QSConversationTurn(id: t.id, who: .ai, text: t.text, proposal: body, label: numbers[t.id].map { "v\($0)" })
+            case .hand, .back:
+                return QSConversationTurn(id: t.id, who: .event, text: t.text + (numbers[t.id].map { " (v\($0))" } ?? ""))
             }
         }
     }
 
-    private func rewrite(_ draft: DraftItem) async {
-        let ask = instruction.trimmingCharacters(in: .whitespaces)
-        guard !ask.isEmpty, store.rewritingId == nil else { return }
-        guard let result = await store.rewriteDraft(draft, text: editText, instruction: ask, useContext: useContext) else { return }
-        previousText = editText
-        editText = result.text
-        aiNote = result.notes
-        instruction = ""
-        previewing = true
+    /// What the newest version changed against the one before, line by line.
+    private func changes(_ draft: DraftItem) -> some View {
+        let vs = versions(draft)
+        let idx = vs.lastIndex(where: { $0.turn.body == draft.body }) ?? vs.count - 1
+        let old = idx > 0 ? vs[idx - 1].turn.body!.components(separatedBy: "\n") : []
+        let new = draft.body.components(separatedBy: "\n")
+        let diff = new.difference(from: old)
+        let removed = Set(diff.removals.map { if case .remove(let o, _, _) = $0 { return o } else { return -1 } })
+        let inserted = Set(diff.insertions.map { if case .insert(let o, _, _) = $0 { return o } else { return -1 } })
+        // Walk both texts together: a removed line shows where it was, struck through; an added one in green.
+        var lines: [(kind: Int, text: String)] = []
+        var i = 0, j = 0
+        while i < old.count || j < new.count {
+            if i < old.count && removed.contains(i) { lines.append((-1, old[i])); i += 1 }
+            else if j < new.count && inserted.contains(j) { lines.append((1, new[j])); j += 1 }
+            else { if j < new.count { lines.append((0, new[j])) }; i += 1; j += 1 }
+        }
+        return VStack(alignment: .leading, spacing: 2) {
+            ForEach(Array(lines.enumerated()), id: \.offset) { _, l in
+                Text(l.text.isEmpty ? " " : l.text).font(Theme.Text.body)
+                    .strikethrough(l.kind < 0)
+                    .foregroundStyle(l.kind < 0 ? Theme.Palette.prFailing : l.kind > 0 ? Theme.Palette.textPrimary : Theme.Palette.textSecondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(l.kind < 0 ? Theme.Palette.prFailing.opacity(0.08) : l.kind > 0 ? Theme.Palette.prOpen.opacity(0.15) : .clear)
+            }
+        }
+        .textSelection(.enabled)
     }
 
     private func card(_ draft: DraftItem) -> some View {
@@ -216,9 +280,17 @@ struct DraftsView: View {
                         }
                     }
                     if editingId != draft.id {
-                        QSIconButton(systemImage: "pencil", help: "Edit the text") { editingId = draft.id; editText = draft.body; previewing = false
-                            instruction = ""; previousText = nil; aiNote = "" }
+                        QSIconButton(systemImage: "pencil", help: "Edit the text") { editingId = draft.id; editText = draft.body; previewing = false }
                     }
+                    let said = (store.draftTurns[draft.id] ?? []).filter { $0.who == .me }.count
+                    Button {
+                        if talking.contains(draft.id) { talking.remove(draft.id) } else { talking.insert(draft.id) }
+                    } label: {
+                        Label(said == 0 ? "Talk" : "Talk (\(said))", systemImage: store.talkingIds.contains(draft.id) ? "ellipsis.bubble.fill" : "bubble.left.and.bubble.right")
+                    }
+                    .buttonStyle(QSHoverStyle())
+                    .foregroundStyle(talking.contains(draft.id) ? Theme.Palette.accent : Theme.Palette.textPrimary)
+                    .help("Talk with the agent that wrote it: ask for changes, answer its questions")
                     if let link = draft.link {
                         QSOpenLinkButton(url: link, help: "Open where it goes")
                     }
@@ -251,7 +323,6 @@ struct DraftsView: View {
                             .frame(minHeight: Theme.Size.editorMinHeight)
                             .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(Theme.Palette.well))
                     }
-                    aiRow(draft)
                     HStack(spacing: Theme.Space.m) {
                         if draft.drafted {
                             Text("It was already in Slack: saving makes it a new text to draft again.")
@@ -268,9 +339,12 @@ struct DraftsView: View {
                         .foregroundStyle(Theme.Palette.accent)
                         .disabled(editText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
+                } else if showChanges.contains(draft.id) && versions(draft).count > 1 {
+                    changes(draft)
                 } else {
                     DraftPreview(text: draft.body, place: draft.place)
                 }
+                if talking.contains(draft.id) || store.talkingIds.contains(draft.id) { thread(draft) }
             }
         }
         .padding(Theme.Space.m)

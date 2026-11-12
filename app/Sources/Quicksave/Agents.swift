@@ -14,6 +14,9 @@ struct AgentJob {
     let maxTurns: Int
     /// Folders outside its own it may read, like the vault for the weekly contract.
     var extraDirectories: [String] = []
+    /// A past session to continue, so the agent remembers what it read. Always forked: the original stays as it was,
+    /// and two drafts of the same session can be talked over at once.
+    var resume: String? = nil
 }
 
 struct AgentRun {
@@ -23,12 +26,16 @@ struct AgentRun {
     let seconds: Double
     /// Actions the agent tried and was not allowed to do.
     let denials: [String]
+    /// The session it ran in, to continue it later.
+    let sessionId: String?
 }
 
 enum Agents {
     static var claude: String { NSHomeDirectory() + "/.local/bin/claude" }
 
-    static func run(_ job: AgentJob) async throws -> AgentRun {
+    /// Runs a job. With `onStep`, the agent's output streams and each action it takes is told as a few words
+    /// ("Reading Linear"), so a conversation can show what it is doing while it works.
+    static func run(_ job: AgentJob, onStep: (@Sendable (String) -> Void)? = nil) async throws -> AgentRun {
         guard FileManager.default.isExecutableFile(atPath: claude) else {
             throw QuicksaveError.message("Claude Code is not installed where Quicksave looks for it (\(claude)).")
         }
@@ -41,12 +48,16 @@ enum Agents {
             p.currentDirectoryURL = URL(fileURLWithPath: job.directory)
             // Settings of the project only: his global hooks (stop checks, state reporters) are noise for a job.
             // The prompt goes through standard input so the list options cannot swallow it.
-            p.arguments = ["-p", "--model", job.model, "--permission-mode", "dontAsk", "--setting-sources", "project,local",
-                           "--max-turns", "\(job.maxTurns)", "--output-format", "json",
-                           "--allowedTools", job.allowed.joined(separator: ","),
-                           "--disallowedTools", job.denied.joined(separator: ","),
-                           "--json-schema", job.schema]
-                + job.extraDirectories.flatMap { ["--add-dir", $0] }
+            let format: [String] = onStep == nil ? ["--output-format", "json"] : ["--output-format", "stream-json", "--verbose"]
+            var args: [String] = ["-p", "--model", job.model, "--permission-mode", "dontAsk", "--setting-sources", "project,local",
+                                  "--max-turns", "\(job.maxTurns)"]
+            args += format
+            args += ["--allowedTools", job.allowed.joined(separator: ","),
+                     "--disallowedTools", job.denied.joined(separator: ","),
+                     "--json-schema", job.schema]
+            args += job.extraDirectories.flatMap { ["--add-dir", $0] }
+            if let resume = job.resume { args += ["--resume", resume, "--fork-session"] }
+            p.arguments = args
             var env = ProcessInfo.processInfo.environment
             env["CLAUDE_CONFIG_DIR"] = nil
             let home = NSHomeDirectory()
@@ -62,7 +73,29 @@ enum Agents {
             let box = Box()
             let group = DispatchGroup()
             group.enter()
-            DispatchQueue.global().async { box.out = stdout.fileHandleForReading.readDataToEndOfFile(); group.leave() }
+            if let onStep {
+                // One JSON event per line: tell each action as it happens, and keep the last line, the result.
+                DispatchQueue.global().async {
+                    var pending = Data()
+                    let handle = stdout.fileHandleForReading
+                    while true {
+                        let chunk = handle.availableData
+                        if chunk.isEmpty { break }
+                        pending.append(chunk)
+                        while let nl = pending.firstIndex(of: 0x0A) {
+                            let line = pending[pending.startIndex..<nl]
+                            pending = Data(pending[pending.index(after: nl)...])
+                            guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+                            if obj["type"] as? String == "result" { box.out = Data(line) }
+                            else if let step = step(from: obj) { onStep(step) }
+                        }
+                    }
+                    if !pending.isEmpty, box.out.isEmpty { box.out = pending }
+                    group.leave()
+                }
+            } else {
+                DispatchQueue.global().async { box.out = stdout.fileHandleForReading.readDataToEndOfFile(); group.leave() }
+            }
             group.enter()
             DispatchQueue.global().async { box.err = stderr.fileHandleForReading.readDataToEndOfFile(); group.leave() }
 
@@ -79,6 +112,44 @@ enum Agents {
     }
 
     private final class Box: @unchecked Sendable { var out = Data(); var err = Data() }
+
+    /// What a streamed event says the agent is doing, in a few words, or nil when it is nothing to tell.
+    static func step(from event: [String: Any]) -> String? {
+        guard event["type"] as? String == "assistant",
+              let content = (event["message"] as? [String: Any])?["content"] as? [[String: Any]] else { return nil }
+        for part in content.reversed() {
+            if part["type"] as? String == "tool_use" {
+                let name = part["name"] as? String ?? ""
+                let input = part["input"] as? [String: Any] ?? [:]
+                return describe(tool: name, input: input)
+            }
+            if part["type"] as? String == "text", let t = part["text"] as? String, !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                return "Thinking"
+            }
+        }
+        return nil
+    }
+
+    private static func describe(tool name: String, input: [String: Any]) -> String {
+        let lower = name.lowercased()
+        if lower.contains("linear") { return "Reading Linear" }
+        if lower.contains("slack") { return "Reading Slack" }
+        if lower.contains("calendar") { return "Reading the calendar" }
+        if lower.contains("notion") { return "Reading Notion" }
+        switch name {
+        case "Bash":
+            let command = input["command"] as? String ?? ""
+            if command.contains("orca linear") { return "Reading Linear" }
+            if command.hasPrefix("gh ") || command.contains(" gh ") { return "Reading GitHub" }
+            if command.hasPrefix("git ") { return "Looking at the code" }
+            return "Running a command"
+        case "Read", "Grep", "Glob": return "Reading files"
+        case "ToolSearch": return "Finding its tools"
+        case "WebFetch", "WebSearch": return "Reading the web"
+        case "StructuredOutput": return "Writing the answer"
+        default: return "Using \(name)"
+        }
+    }
 
     private static func parse(_ out: Data, _ err: Data, _ seconds: Double) throws -> AgentRun {
         let text = String(data: out, encoding: .utf8) ?? ""
@@ -107,7 +178,7 @@ enum Agents {
             return command.map { "\(tool): \($0)" } ?? tool
         }
         return AgentRun(resultJSON: result, cost: obj["total_cost_usd"] as? Double, turns: obj["num_turns"] as? Int,
-                        seconds: seconds, denials: denials)
+                        seconds: seconds, denials: denials, sessionId: obj["session_id"] as? String)
     }
 }
 
@@ -247,47 +318,79 @@ extension AgentJob {
 extension AgentJob {
     /// Rewrites a draft following his instruction. With context it may read where the draft came from, only to get the
     /// facts right. It returns text and nothing else: it can never post, send or save.
-    static func rewriteDraft(place: String, note: String, link: String?, item: String, text: String,
-                             instruction: String, useContext: Bool) -> AgentJob {
-        AgentJob(
-            name: "rewrite draft",
-            directory: NSTemporaryDirectory(),
-            prompt: """
-            You edit a draft that Alejandro will post himself. Apply his instruction to the text and return the whole new text.
+    static let draftContextTools = ["ToolSearch", "mcp__claude_ai_Linear__get_issue", "mcp__claude_ai_Linear__list_comments",
+                                    "mcp__claude_ai_Slack__slack_read_channel", "mcp__claude_ai_Slack__slack_read_thread",
+                                    "mcp__claude_ai_Slack__slack_search_users", "mcp__claude_ai_Slack__slack_search_channels"]
+    static let draftNever = ["mcp__claude_ai_Slack__slack_send_message", "mcp__claude_ai_Slack__slack_send_message_draft",
+                             "mcp__claude_ai_Slack__slack_schedule_message", "mcp__claude_ai_Gmail__send_message",
+                             "mcp__claude_ai_Linear__save_issue", "mcp__claude_ai_Linear__save_comment",
+                             "mcp__claude_ai_Linear__save_status_update", "Edit", "Write", "Bash(rm:*)"]
 
-            Draft for: \(place)\(link.map { " (\($0))" } ?? "")
-            What to do with it: \(note.isEmpty ? "nothing more" : note)
-            It came from: \(item.isEmpty ? "unknown" : item)
-            His instruction: \(instruction)
+    /// One turn of the conversation about a draft. When the draft keeps the session of the agent that wrote it, that
+    /// session continues and remembers everything it read; otherwise a new agent starts with the conversation so far.
+    /// `text` is the version being talked about: the last one proposed, even if he has not used it yet.
+    static func draftTalk(_ draft: DraftItem, text: String, history: [DraftTurn], message: String) -> AgentJob {
+        let resumed = draft.session != nil
+        let rules = """
+        Rules:
+        - If his message is clear enough, return `text`: the complete new text, ready to paste, not a diff. And `notes`: one short sentence on what you changed.
+        - If you need something from him to do it right (a fact, a choice), return `question` instead, one short question, and no `text`.
+        - Keep the format of the place. Slack text is plain Markdown with no headings; Linear, GitHub and mail text is Markdown. Keep links and mentions unless he asks to change them.
+        - English, no em-dashes, short direct sentences, every code with a 2-3 word tag.
+        - Do not invent facts. Read only what his message needs. Deferred tools: find them first with ToolSearch.
+        - Never post, send or save anything anywhere: not in Linear, Slack or the vault. You only return text.
+        """
+        let current = """
+        The text as it is now (he may have edited it by hand):
+        <<<
+        \(text)
+        >>>
 
-            Current text:
-            <<<
-            \(text)
-            >>>
+        His message: \(message)
+        """
+        let prompt: String
+        if resumed {
+            prompt = """
+            Alejandro is reviewing one of the drafts you returned in this session, the one with the note "\(draft.note)", and talks to you about it. Work only on that draft.
 
-            Rules:
-            - Return the complete text, ready to paste: not a diff and not an explanation.
-            - Keep the format of the place. Slack text is plain Markdown with no headings (**bold**, _italic_, `code`, lists); Linear, GitHub and mail text is Markdown. Keep links and mentions unless he asks to change them.
-            - Write in English, with no em-dashes, in short direct sentences.
-            - Do not invent facts. If his instruction asks for something you cannot find, keep the text as close as you can and say so in `notes`.
-            - Never post, send or save anything anywhere. You only return text.
-            \(useContext ? "- You may read where the draft came from, only to get the facts right: the item above in Linear, the Slack channel or thread behind the link, and people in Slack. Read only what the instruction needs. Those tools are deferred: find them first with ToolSearch (for example select:mcp__claude_ai_Linear__get_issue), then call them. Do not say you have no access before trying." : "- You have no tools. Work only from the text, the note and his instruction.")
+            \(current)
 
-            Return the structured result: `text` is the new text, and `notes` is one short sentence on what you changed, or what you could not do.
-            """,
+            \(rules)
+            """
+        } else {
+            let past = history.compactMap { t -> String? in
+                switch t.who {
+                case .me: return "He said: " + t.text
+                case .agent: return t.body == nil ? "You asked: " + t.text : "You rewrote it: " + t.text
+                default: return nil
+                }
+            }
+            prompt = """
+            You help Alejandro polish a draft he will post himself, talking with him about it.
+
+            Draft for: \(draft.place)\(draft.link.map { " (\($0.absoluteString))" } ?? "")
+            What to do with it: \(draft.note.isEmpty ? "nothing more" : draft.note)
+            It came from: \(draft.item.isEmpty ? draft.source : draft.item)
+            \(past.isEmpty ? "" : "\nThe conversation so far:\n" + past.joined(separator: "\n") + "\n")
+            \(current)
+
+            \(rules)
+            - You may read where the draft came from, only to get facts right: the item above in Linear, the Slack channel or thread behind the link.
+            """
+        }
+        let ritual = Ritual(rawValue: draft.source) != nil
+        return AgentJob(
+            name: "draft talk",
+            directory: draft.sessionDir ?? NSTemporaryDirectory(),
+            prompt: prompt,
             model: "claude-sonnet-5-5",
-            allowed: useContext
-                ? ["ToolSearch", "mcp__claude_ai_Linear__get_issue", "mcp__claude_ai_Linear__list_comments",
-                   "mcp__claude_ai_Slack__slack_read_channel", "mcp__claude_ai_Slack__slack_read_thread",
-                   "mcp__claude_ai_Slack__slack_search_users", "mcp__claude_ai_Slack__slack_search_channels"]
-                : ["Read"],
-            denied: ["mcp__claude_ai_Slack__slack_send_message", "mcp__claude_ai_Slack__slack_send_message_draft",
-                     "mcp__claude_ai_Slack__slack_schedule_message", "mcp__claude_ai_Gmail__send_message",
-                     "mcp__claude_ai_Linear__save_issue", "mcp__claude_ai_Linear__save_comment", "Bash(rm:*)"],
+            allowed: ritual ? ritualReads : draftContextTools,
+            denied: ritual ? ritualNever : draftNever,
             schema: """
-            {"type":"object","properties":{"text":{"type":"string"},"notes":{"type":"string"}},"required":["text"]}
+            {"type":"object","properties":{"text":{"type":"string"},"question":{"type":"string"},"notes":{"type":"string"}}}
             """,
-            maxTurns: useContext ? 25 : 6)
+            maxTurns: 40,
+            resume: draft.session)
     }
 }
 
@@ -295,6 +398,48 @@ extension AgentJob {
     /// /start-task for an issue that has no agent yet, run unattended from the vault: it creates the alan-apps worktree
     /// and the agent tab named after the issue, in Orca, where he takes over. Not code work: no worktree, and the app
     /// opens the agent itself.
+    /// Carries out what he said to do with one of his expired issues: reassign it, move it, split it… in Linear only.
+    /// A message to someone is returned as a draft, never sent.
+    static func issueInstruction(id: String, title: String, url: String, instruction: String) -> AgentJob {
+        AgentJob(
+            name: "instruction \(id)",
+            directory: Morning.repo,
+            prompt: """
+            Alejandro looked at one of his overdue Linear issues in Quicksave and said what to do with it. Do exactly that, in Linear, and nothing more.
+
+            The issue: \(id) "\(title)" (\(url))
+            What he said:
+            <<<
+            \(instruction)
+            >>>
+
+            Rules:
+            - Read the issue first: `orca linear issue \(id) --relations --json`.
+            - Change only what he asked: assignee, state, due date, priority, project, labels, relations or description. To find a person, use the Linear users tools (list_users, get_user) and pick the one he means; if two fit, do nothing and return needs_you naming both.
+            - A description is written to a file first, with the Write tool, in "\(Morning.scratch)/", then passed with --body-file (quotes matter, the folder has a space).
+            - Never post a comment, never send a message. If telling someone is part of what he asked (or plainly needed, like a reassignment to a person who does not know yet), return a draft: where (Slack or Linear), note (who and why), link (the Slack thread or issue it belongs to, if any) and text, in English, short, no em-dashes, every code with a 2-3 word tag.
+            - If a write answers linear_write_unconfirmed, retry it with its --write-id.
+            - Read the issue back at the end to check what changed.
+
+            Commands: `orca linear save-issue \(id) --assignee <user> --state <state> --due-date <yyyy-mm-dd|null> --priority <none|low|medium|high|urgent> --project <project|null> --body-file <path> --json` (only the flags you need), `orca linear relation add|remove`, `orca linear label add|remove`. If one fails, read its --help once and retry.
+
+            \(Morning.howToRun)
+
+            Return: outcome (done, needs_you or failed), summary (one or two sentences in English saying what changed), drafts.
+            """,
+            model: "claude-sonnet-5-5",
+            allowed: ["Read", "ToolSearch", "Bash(date:*)", "Write(/\(Morning.scratch)/**)",
+                      "mcp__claude_ai_Linear__list_users", "mcp__claude_ai_Linear__get_user",
+                      "Bash(orca linear save-issue:*)", "Bash(orca linear relation add:*)", "Bash(orca linear relation remove:*)",
+                      "Bash(orca linear label add:*)", "Bash(orca linear label remove:*)"] + Morning.readLinear,
+            denied: Morning.neverPost + ["mcp__claude_ai_Slack__slack_send_message_draft"],
+            schema: """
+            {"type":"object","properties":{"outcome":{"type":"string","enum":["done","needs_you","failed"]},"summary":{"type":"string"},"drafts":{"type":"array","items":{"type":"object","properties":{"where":{"type":"string"},"note":{"type":"string"},"link":{"type":"string"},"text":{"type":"string"}},"required":["where","text"]}}},"required":["outcome","summary"]}
+            """,
+            maxTurns: 30,
+            extraDirectories: [Morning.scratch])
+    }
+
     static func startTask(id: String) -> AgentJob {
         AgentJob(
             name: "start task \(id)",
@@ -329,6 +474,19 @@ extension AgentJob {
     }
 }
 
+struct InstructionResult: Decodable {
+    struct DraftOut: Decodable {
+        let place: String
+        let note: String?
+        let link: String?
+        let text: String
+        enum CodingKeys: String, CodingKey { case place = "where", note, link, text }
+    }
+    let outcome: String
+    let summary: String
+    let drafts: [DraftOut]?
+}
+
 struct StartTaskResult: Decodable {
     let outcome: String
     let worktreePath: String?
@@ -336,8 +494,9 @@ struct StartTaskResult: Decodable {
     let summary: String
 }
 
-struct DraftRewriteResult: Decodable {
-    let text: String
+struct DraftTalkResult: Decodable {
+    let text: String?
+    let question: String?
     let notes: String?
 }
 

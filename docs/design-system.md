@@ -7,6 +7,19 @@ Native macOS, sober. Light and dark mode come from the system's semantic colors.
 - Screens use components and tokens, never raw styling. Changing the look of the whole app is changing the tokens.
 - State colors are Linear's own, read live from the workspace.
 
+## Talking to the AI (11-nov)
+
+Every place where he writes a prompt and an AI acts uses one conversation, so they all look and behave the same:
+
+- On top, one sentence: what the AI does there and what it may touch.
+- His messages on the right, the AI's on the left. A question from the AI is purple and gives the box a purple edge until he answers.
+- While it works, what it is doing right now in a few words ("Reading Linear", "Reading Slack", "Writing the answer"), read live from the agent.
+- What it proposes (a text, a plan) shown as it will look, with one button that says exactly what accepting does. Nothing is used or written before that button.
+- Optional quick buttons with ready-made messages.
+- The box: Return sends, Shift-Return adds a line. It grows with the text, then scrolls.
+
+Built so far in Drafts. Next: Tuesday's rituals, the morning, the inbox.
+
 ## Links and hover cards
 
 - Every link in the app is one component: it opens the link and, when the pointer rests on it for 0.8 s, shows a hover card. Links inside text get the same card. No screen opens a link by hand.

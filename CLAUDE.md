@@ -7,13 +7,13 @@ Nothing here is inherited from older setups (the vault, global rules). A rule ex
 ## Rules
 
 - Talk to Alejandro in Spanish. Anything that leaves (Linear, GitHub, Slack, email) is in English, with no em-dashes.
-- Never publish anything: no Linear comments, Slack messages, GitHub comments or mail. Drafts only, which he posts himself.
+- Never publish anything: no Linear comments, Slack messages, GitHub comments or mail. Drafts only, which he posts himself. One exception: [Reviews](docs/reviews.md) publishes a pull request review, only what he kept, only when he presses Publish.
 - Never `git commit` or `git push` unless he asks in the same turn.
 - Talk about the product, never the code. Alejandro does not want to see Swift, file names or diffs: report what the app does, what changed for him, and what he has to decide.
 - Every code (issue, PR) carries a 2-3 word tag of what it is: `ES-12785 (30-day invitations)`, never a bare id.
 - The app's interface is in English only, for now.
 - Linear is the source of truth for tasks and their state. Quicksave reads it and never keeps its own copy of a task's state.
-- Only two things in the app write to Linear: the inbox, when he decides a card, and the day's plan, when he approves it in the morning or adds or takes out a side quest from the board.
+- Only three things in the app write to Linear: the inbox, when he decides a card; the day's plan, when he approves it in the morning or adds or takes out a side quest from the board; and the board, when he drags a card to another column, which moves that issue to the column's state.
 
 ## Docs
 
@@ -24,6 +24,7 @@ Nothing here is inherited from older setups (the vault, global rules). A rule ex
 - [The morning](docs/morning.md): the panel that plans the Main Quest, chooses the game and writes the standup.
 - [Background agents](docs/background-agents.md): how the app starts unattended jobs, with their permissions, model and history.
 - [Drafts](docs/drafts.md): the section where every draft lands, to post by hand and archive.
+- [Reviews](docs/reviews.md): the pull requests waiting for his review, prepared by an agent and published from the app.
 - [Design system](docs/design-system.md): tokens and components; screens never style by hand.
 
 ## Layout

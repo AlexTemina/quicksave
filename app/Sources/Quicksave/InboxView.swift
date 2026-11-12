@@ -8,23 +8,26 @@ struct InboxView: View {
     @FocusState private var editorFocused: Bool
     @State private var editing = false
     @State private var draft = ""
+    @State private var newDate = Date()
+    /// Editing an expired card's instruction rather than its date.
+    @State private var instructing = false
     @State private var exit: Choice?
 
     /// What a press does to the current card. The card flies off to the side of its meaning.
     enum Choice: Equatable {
-        case accept, reject, done, later, correct(String)
+        case accept, reject, done, later, backlog, correct(String), instruct(String)
 
         var offset: CGSize {
             switch self {
-            case .accept, .correct: return CGSize(width: 560, height: 0)
+            case .accept, .correct, .instruct: return CGSize(width: 560, height: 0)
             case .reject: return CGSize(width: -560, height: 0)
-            case .done: return CGSize(width: 0, height: 420)
+            case .done, .backlog: return CGSize(width: 0, height: 420)
             case .later: return CGSize(width: 0, height: -60)
             }
         }
         var rotation: Double {
             switch self {
-            case .accept, .correct: return 7
+            case .accept, .correct, .instruct: return 7
             case .reject: return -7
             default: return 0
             }
@@ -38,6 +41,7 @@ struct InboxView: View {
             header
             if let error = store.inboxError { QSNote(text: error, icon: "exclamationmark.triangle", warning: true) }
             if let notice = store.inboxNotice { QSNote(text: notice, icon: "exclamationmark.triangle", warning: true) }
+            ForEach(store.instructionResults.prefix(3), id: \.self) { QSNote(text: $0, icon: "checkmark.circle") }
             Group { if let card = store.currentCard { deck(card) } else { emptyState } }
                 .frame(maxHeight: .infinity, alignment: .top)
             VStack(spacing: Theme.Space.l) {
@@ -64,6 +68,11 @@ struct InboxView: View {
         .onKeyPress(KeyEquivalent("q")) { act(.done) }
         .onKeyPress(.space) { act(.later) }
         .onKeyPress(KeyEquivalent("e")) { beginEdit() ? .handled : .ignored }
+        .onKeyPress(KeyEquivalent("r")) { beginInstruct() ? .handled : .ignored }
+        .onKeyPress(KeyEquivalent("w")) {
+            guard case .expired? = store.currentCard else { return .ignored }
+            return act(.backlog)
+        }
     }
 
     // MARK: Header and footer
@@ -122,7 +131,10 @@ struct InboxView: View {
     private func deck(_ card: InboxCard) -> some View {
         let behind = min(2, store.pendingCards.count - 1)
         return Group {
-            if editing, case .triage(let item) = card { editor(for: item) } else { cardView(card) }
+            if editing, case .triage(let item) = card { editor(for: item) }
+            else if editing, instructing, case .expired(let item) = card { instructionEditor(for: item) }
+            else if editing, case .expired(let item) = card { dateEditor(for: item) }
+            else { cardView(card) }
         }
         .background(alignment: .top) {
             ForEach(0..<max(behind, 0), id: \.self) { i in
@@ -144,6 +156,46 @@ struct InboxView: View {
         switch card {
         case .triage(let item): TriageCardView(item: item)
         case .pullRequest(let pr): PullRequestCardView(pr: pr)
+        case .expired(let e): ExpiredCardView(item: e)
+        }
+    }
+
+    /// What to do with an expired issue, in his words.
+    private func instructionEditor(for item: ExpiredItem) -> some View {
+        QSDeckCard {
+            HStack {
+                QSLabel("Tell it what to do", icon: "text.bubble", accent: true)
+                Spacer()
+                Text(item.id).font(Theme.Text.code).foregroundStyle(Theme.Palette.textSecondary)
+            }
+            Text(item.issue.title).font(Theme.Text.cardTitle).fixedSize(horizontal: false, vertical: true)
+            TextEditor(text: $draft)
+                .font(Theme.Text.body)
+                .scrollContentBackground(.hidden)
+                .padding(Theme.Space.s)
+                .frame(minHeight: Theme.Size.editorMinHeight)
+                .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(Theme.Palette.well))
+                .focused($editorFocused)
+            Text("For example: reassign it to Gonzalo and draft him a Slack message. An agent does it in Linear; any message comes back as a draft.")
+                .font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
+        }
+    }
+
+    /// A new due date for an expired issue: one more postpone.
+    private func dateEditor(for item: ExpiredItem) -> some View {
+        QSDeckCard {
+            HStack {
+                QSLabel("New date", icon: "calendar", accent: true)
+                Spacer()
+                Text(item.id).font(Theme.Text.code).foregroundStyle(Theme.Palette.textSecondary)
+            }
+            Text(item.issue.title).font(Theme.Text.cardTitle).fixedSize(horizontal: false, vertical: true)
+            DatePicker("Due", selection: $newDate, in: Date()..., displayedComponents: .date)
+                .datePickerStyle(.graphical)
+                .labelsHidden()
+                .frame(maxWidth: 320)
+            Text("Postpone \(item.postpones + 1) of \(ExpiredItem.maxPostpones). After the third, it can only be done, sent to the backlog or canceled.")
+                .font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
         }
     }
 
@@ -172,17 +224,54 @@ struct InboxView: View {
                 .keyboardShortcut(.cancelAction)
                 .buttonStyle(QSHoverStyle())
             Spacer()
-            Button {
-                act(.correct(draft))
-            } label: { Label("Accept with this", systemImage: Theme.Icon.accept) }
-                .keyboardShortcut(.return, modifiers: .command)
-                .buttonStyle(QSHoverStyle())
-                .foregroundStyle(Theme.Palette.decisionAccept)
-                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            if instructing {
+                Button {
+                    act(.instruct(draft))
+                } label: { Label("Do it", systemImage: "paperplane") }
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .buttonStyle(QSHoverStyle())
+                    .foregroundStyle(Theme.Palette.decisionAccept)
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            } else if case .expired? = store.currentCard {
+                Button {
+                    let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = .current
+                    act(.correct(f.string(from: newDate)))
+                } label: { Label("Move to this date", systemImage: "calendar") }
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .buttonStyle(QSHoverStyle())
+                    .foregroundStyle(Theme.Palette.decisionAccept)
+            } else {
+                Button {
+                    act(.correct(draft))
+                } label: { Label("Accept with this", systemImage: Theme.Icon.accept) }
+                    .keyboardShortcut(.return, modifiers: .command)
+                    .buttonStyle(QSHoverStyle())
+                    .foregroundStyle(Theme.Palette.decisionAccept)
+                    .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
         }
     }
 
-    private func decisionBar(for card: InboxCard) -> some View {
+    @ViewBuilder private func decisionBar(for card: InboxCard) -> some View {
+        if case .expired(let item) = card { expiredBar(for: item) } else { reviewBar(for: card) }
+    }
+
+    /// An expired issue: cancel, done, later, backlog, a new date (until the third postpone) or today.
+    private func expiredBar(for item: ExpiredItem) -> some View {
+        HStack(spacing: Theme.Space.m) {
+            QSDecisionButton(title: "Cancel", icon: Theme.Icon.reject, key: "A", color: Theme.Palette.decisionReject) { act(.reject) }
+            QSDecisionButton(title: "Already done", icon: Theme.Icon.alreadyDone, key: "Q", color: Theme.Palette.decisionDone) { act(.done) }
+            QSDecisionButton(title: "Later", icon: Theme.Icon.later, key: "space", color: Theme.Palette.decisionLater) { act(.later) }
+            QSDecisionButton(title: "Backlog", icon: "tray.and.arrow.down", key: "W", color: Theme.Palette.decisionLater) { act(.backlog) }
+            QSDecisionButton(title: "Tell it", icon: "text.bubble", key: "R", color: Theme.Palette.decisionCorrect) { _ = beginInstruct() }
+                .help("Say what to do, like reassigning it to someone. An agent does it in Linear.")
+            QSDecisionButton(title: "New date", icon: "calendar", key: "E", color: Theme.Palette.decisionCorrect, enabled: item.canPostpone) { _ = beginEdit() }
+                .help(item.canPostpone ? "Postpone it: \(item.postpones) of \(ExpiredItem.maxPostpones) used" : "Postponed \(item.postpones) times: do it, drop it or close it")
+            QSDecisionButton(title: "Today", icon: Theme.Icon.accept, key: "D", color: Theme.Palette.decisionAccept) { act(.accept) }
+        }
+    }
+
+    private func reviewBar(for card: InboxCard) -> some View {
         var canCorrect = false
         if case .triage = card { canCorrect = true }
         return HStack(spacing: Theme.Space.m) {
@@ -198,7 +287,7 @@ struct InboxView: View {
 
     @discardableResult private func act(_ choice: Choice) -> KeyPress.Result {
         guard let card = store.currentCard, exit == nil else { return .ignored }
-        if editing, case .correct = choice {} else if editing { return .ignored }
+        if editing, case .correct = choice {} else if editing, case .instruct = choice {} else if editing { return .ignored }
         withAnimation(.easeIn(duration: 0.16)) { exit = choice }
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: 170_000_000)
@@ -208,16 +297,33 @@ struct InboxView: View {
             case .reject: store.decide(card, .reject)
             case .done: store.decide(card, .alreadyDone)
             case .later: store.later(card)
+            case .backlog: store.decide(card, .backlog)
+            case .instruct(let text): store.decide(card, .instruct(text))
             }
             var t = Transaction()
             t.disablesAnimations = true
-            withTransaction(t) { exit = nil; editing = false }
+            withTransaction(t) { exit = nil; editing = false; instructing = false }
             deckFocused = true
         }
         return .handled
     }
 
+    private func beginInstruct() -> Bool {
+        guard !editing, case .expired? = store.currentCard else { return false }
+        draft = ""
+        instructing = true
+        editing = true
+        editorFocused = true
+        return true
+    }
+
     private func beginEdit() -> Bool {
+        if !editing, case .expired(let item)? = store.currentCard {
+            guard item.canPostpone else { return false }
+            newDate = Calendar.current.date(byAdding: .day, value: 1, to: Date()) ?? Date()
+            editing = true
+            return true
+        }
         guard !editing, case .triage(let item)? = store.currentCard else { return false }
         draft = item.willDo.map { "- " + $0 }.joined(separator: "\n")
         editing = true
@@ -227,6 +333,7 @@ struct InboxView: View {
 
     private func stopEditing() {
         editing = false
+        instructing = false
         deckFocused = true
     }
 }
@@ -301,6 +408,40 @@ struct ApplyReportView: View {
         .frame(width: Theme.Size.sheetWidth)
         .frame(maxHeight: Theme.Size.sheetMaxHeight)
         .background(QSWindowBackground())
+    }
+}
+
+/// One of his issues whose due date has passed: how late it is, how many times it was pushed, and what it is about.
+struct ExpiredCardView: View {
+    let item: ExpiredItem
+
+    var body: some View {
+        let i = item.issue
+        QSDeckCard {
+            HStack(spacing: Theme.Space.s) {
+                QSTag(text: item.daysLate == 1 ? "1 day late" : "\(item.daysLate) days late", icon: Theme.Icon.due, color: Theme.Palette.prFailing)
+                Text(i.identifier).font(Theme.Text.code).foregroundStyle(Theme.Palette.textSecondary)
+                Text(i.state.name).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
+                Spacer()
+                QSOpenLinkButton(url: URL(string: i.url), help: "Open \(i.identifier) in Linear")
+            }
+            Text(i.title).font(Theme.Text.heroTitle).fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: Theme.Space.m) {
+                if let due = i.dueDate { Label("Was due " + QSDate.friendly(due), systemImage: Theme.Icon.due) }
+                Label(i.priorityName.capitalized, systemImage: "flag")
+                if let p = i.project?.name { Label(p, systemImage: "folder") }
+            }
+            .font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
+            if item.postpones > 0 {
+                QSNote(text: item.canPostpone
+                       ? "Postponed \(item.postpones) of \(ExpiredItem.maxPostpones) times."
+                       : "Postponed \(item.postpones) times. No more new dates: do it today, send it to the backlog, cancel it or close it.",
+                       icon: "clock.arrow.circlepath", warning: !item.canPostpone)
+            }
+            if !item.description.isEmpty {
+                MarkdownBlock(item.description).font(Theme.Text.body)
+            }
+        }
     }
 }
 

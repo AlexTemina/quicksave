@@ -42,7 +42,13 @@ struct MorningPlan: Decodable {
         let team: String?
     }
     struct Discard: Decodable, Hashable { let what: String; let why: String }
-    struct Side: Decodable, Hashable { let id: String; let title: String; let url: String?; let why: String }
+    struct Side: Decodable, Hashable {
+        let id: String; let title: String; let url: String?; let why: String
+        /// The day's side quest from the middle of the pile.
+        var slot: Bool? = nil
+    }
+    /// An issue of one of his projects, not his, worth a look today.
+    struct Watch: Decodable, Hashable { let id: String; let title: String; let url: String?; let why: String }
     /// create a new Main Quest, move the due date of a slipped one, or keep the open one as it is.
     let action: String
     let existing: String?
@@ -57,6 +63,8 @@ struct MorningPlan: Decodable {
     let notes: String?
     /// What fits today beyond the Main Quest.
     let sideQuests: [Side]?
+    /// From the projects he leads: what to look at today.
+    var watch: [Watch]? = nil
 
     /// Something to write in Linear on approval: a new or moved Main Quest, or today's side quests.
     var writes: Bool { action != "keep" || !(sideQuests ?? []).isEmpty }
@@ -126,7 +134,7 @@ enum Morning {
 
 extension AgentJob {
     /// Proposes the day's Main Quest. It reads Linear, the weekly contract and his work calendar, and writes nothing.
-    static func morningPlan(comments: String, rounds: [(plan: String, correction: String)]) -> AgentJob {
+    static func morningPlan(comments: String, rounds: [(plan: String, correction: String)], window: String) -> AgentJob {
         let history = rounds.isEmpty ? "None: this is the first proposal." : rounds.enumerated().map { i, r in
             "Proposal \(i + 1):\n\(r.plan)\nHis correction: \(r.correction)"
         }.joined(separator: "\n\n")
@@ -150,6 +158,8 @@ extension AgentJob {
             \(comments.isEmpty ? "None." : comments)
             >>>
 
+            \(window)
+            \(Ritual.due(posted: Ritual.postedSaved()).contains(.sfa) && !Ritual.isTuesday ? "\nThe weekly SFA was due on Tuesday and is not posted yet. Count about half an hour for it as busy time today and say so in notes. Quicksave drafts it from Today; it is not a side quest.\n" : "")\(Ritual.isTuesday ? "\nToday is Tuesday, the last day of Alan's week. Two things are due today whatever else happens: the Linear weekly status updates of his projects and the crew initiative, before 14:00, and the weekly SFA in the afternoon. Count about an hour for each as busy time, like meetings, when you size the side quests, and say so in notes. Quicksave drafts them from Today; they are not side quests.\n" : "")
             Earlier proposals today and his corrections, oldest first. When there are any, start from the last proposal and apply every correction:
             \(history)
 
@@ -164,7 +174,9 @@ extension AgentJob {
             - why: why this goal, one line. discarded: what you left out and why, one line each.
             - meetings: today's meetings, one line each, like "10:00 Spain weekly".
             - failedSources: every source you could not read, said plainly. Empty if all worked.
-            - sideQuests: his other open issues that fit today next to the Main Quest, and only what fits. Work out the free time: his working day minus meetings minus what the Main Quest takes, and size each issue by its estimate or what it says. Rank by the 16-oct rule: something breaking now, then due today or overdue, then any date before no date and sooner first, then Linear priority, then size with small first. Never the Main Quest or its pieces, nothing labelled collectible, nothing in Pending for inputs. Each with id, title (a 2-3 word tag, without the code), url, and why in a few words (for example "due today, XS").
+            - sideQuests: his other open issues that fit today next to the Main Quest, and only what fits. Work out the free time: his working day minus meetings minus what the Main Quest takes, and size each issue by its estimate or what it says. Rank by the 16-oct rule: something breaking now, then due today or overdue, then any date before no date and sooner first, then Linear priority, then size with small first. Never the Main Quest or its pieces, nothing labelled collectible, nothing in Pending for inputs. Each with id, title (a 2-3 word tag, without the code), url, and why in a few words (for example "due today, XS"). One of them is the medium slot (see the list above), with slot true.
+            - discarded: every issue of the window that is not a piece or a side quest, by its code with its tag, and the reason in a few words ("waiting on Elise", "due 14-nov, no time today"). Nothing of the window may be missing.
+            - watch: from his projects' list above, only what he should look at today. Each with id, title (2-3 word tag), url, and why ("overdue 3 days, Rémi's", "blocked on review"). Empty if all is on track.
             """,
             model: "claude-sonnet-5-5",
             allowed: ["Read", "Grep", "Glob", "ToolSearch", "Bash(date:*)",
@@ -180,7 +192,7 @@ extension AgentJob {
                                          "mcp__claude_ai_Google_Calendar__update_event", "mcp__claude_ai_Google_Calendar__delete_event",
                                          "mcp__claude_ai_Google_Calendar__respond_to_event"],
             schema: """
-            {"type":"object","properties":{"action":{"type":"string","enum":["create","move","keep"]},"existing":{"type":"string"},"goal":{"type":"string"},"done":{"type":"string"},"pieces":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"step":{"type":"string"},"url":{"type":"string"},"team":{"type":"string"}},"required":["title","step"]}},"dueDate":{"type":"string"},"why":{"type":"string"},"discarded":{"type":"array","items":{"type":"object","properties":{"what":{"type":"string"},"why":{"type":"string"}},"required":["what","why"]}},"meetings":{"type":"array","items":{"type":"string"}},"failedSources":{"type":"array","items":{"type":"string"}},"notes":{"type":"string"},"sideQuests":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"url":{"type":"string"},"why":{"type":"string"}},"required":["id","title","why"]}}},"required":["action","goal","done","pieces","dueDate","why","discarded","meetings","failedSources"]}
+            {"type":"object","properties":{"action":{"type":"string","enum":["create","move","keep"]},"existing":{"type":"string"},"goal":{"type":"string"},"done":{"type":"string"},"pieces":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"step":{"type":"string"},"url":{"type":"string"},"team":{"type":"string"}},"required":["title","step"]}},"dueDate":{"type":"string"},"why":{"type":"string"},"discarded":{"type":"array","items":{"type":"object","properties":{"what":{"type":"string"},"why":{"type":"string"}},"required":["what","why"]}},"meetings":{"type":"array","items":{"type":"string"}},"failedSources":{"type":"array","items":{"type":"string"}},"notes":{"type":"string"},"sideQuests":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"url":{"type":"string"},"why":{"type":"string"},"slot":{"type":"boolean"}},"required":["id","title","why"]}},"watch":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"title":{"type":"string"},"url":{"type":"string"},"why":{"type":"string"}},"required":["id","title","why"]}}},"required":["action","goal","done","pieces","dueDate","why","discarded","meetings","failedSources"]}
             """,
             maxTurns: 60,
             extraDirectories: [NSHomeDirectory() + "/vault"])
@@ -359,6 +371,7 @@ struct MorningView: View {
                             gameStep
                             if store.standupDone { finished.id("done") }
                         } else {
+                            auditorCard
                             if applying { applyingGate } else if gateCount > 0 || store.approvedCount > 0 { gate }
                             commentsStep
                             if store.morningProposing { working("An agent is reading Linear, the weekly contract and your calendar…") }
@@ -425,6 +438,54 @@ struct MorningView: View {
         }
         .buttonStyle(QSHoverStyle(padding: 0, backdrop: false))
         .disabled(!enabled || current)
+    }
+
+    /// The auditor in plain words: when it last read his sources (Slack, mail, GitHub, Linear, meetings) to bring new
+    /// cards to the inbox, what it could not read, and a button to read them again now. It takes long (50 minutes on
+    /// 10-nov), so the morning never waits for it.
+    var auditorCard: some View {
+        let status = store.auditor
+        let running = status?.run?.running == true
+        let failed = status?.failed ?? []
+        let checked = status?.sources.filter(\.ok).compactMap(\.lastSwept).max()
+        return VStack(alignment: .leading, spacing: Theme.Space.s) {
+            HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                Image(systemName: running ? "arrow.triangle.2.circlepath" : failed.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(running ? Theme.Palette.accent : failed.isEmpty ? Theme.Palette.agentIdle : Theme.Palette.warning)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(running ? "Reading your sources now…"
+                         : checked.map { "Sources read " + QSDate.ago($0) } ?? (status == nil ? "Reading…" : "Sources never read"))
+                        .font(Theme.Text.cardTitle)
+                    Text(running
+                         ? "The auditor started " + (status?.run?.started.map(QSDate.ago) ?? "just now") + ". What needs you will reach the Inbox when it finishes. You can plan meanwhile."
+                         : failed.isEmpty
+                            ? "The auditor reads Slack, mail, GitHub, Linear and meetings, and brings what needs you to the Inbox."
+                            : "Could not read " + failed.map(\.name).joined(separator: ", ") + ", so the Inbox may be missing things from there.")
+                        .font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                if let run = status?.run, let output = run.output, !running {
+                    AuditorOutputButton(run: run, output: output)
+                }
+                if running { ProgressView().controlSize(.small) }
+                else {
+                    Button { Task { await store.sweepNow() } } label: { Label("Read again now", systemImage: "arrow.clockwise") }
+                        .buttonStyle(QSHoverStyle()).foregroundStyle(Theme.Palette.accent)
+                        .disabled(store.auditorStarting || status == nil)
+                        .help("Runs the auditor now, in Orca. It takes a while, and the plan does not wait for it.")
+                }
+            }
+            ForEach(failed) { s in
+                Text("\(s.name), last read " + (s.lastSwept.map(QSDate.ago) ?? "never") + ": " + (s.error ?? "failed"))
+                    .font(Theme.Text.micro).foregroundStyle(Theme.Palette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if let notice = store.auditorNotice { QSNote(text: notice, icon: "exclamationmark.triangle", warning: true) }
+        }
+        .padding(Theme.Space.m)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(Theme.Palette.well))
     }
 
     private var gate: some View {
@@ -518,9 +579,23 @@ struct MorningView: View {
                         QSLabel("Side quests that fit", icon: Theme.Icon.sideQuests)
                         QSBulletList(lines: sides.map { s in
                             let code = s.url.flatMap(URL.init).map { "[\(s.id)](\($0.absoluteString))" } ?? s.id
-                            return "\(code) \(s.title): \(s.why)"
+                            return "\(code) \(s.title): \(s.why)" + (s.slot == true ? " *(medium slot)*" : "")
                         })
                     }
+                }
+                if let watch = plan.watch, !watch.isEmpty {
+                    VStack(alignment: .leading, spacing: Theme.Space.s) {
+                        QSLabel("Your projects: worth a look", icon: "eye")
+                        QSBulletList(lines: watch.map { w in
+                            let code = w.url.flatMap(URL.init).map { "[\(w.id)](\($0.absoluteString))" } ?? w.id
+                            return "\(code) \(w.title): \(w.why)"
+                        })
+                    }
+                }
+                let missing = store.morningWindow?.missing(from: plan) ?? []
+                if !missing.isEmpty {
+                    QSNote(text: "The plan does not mention " + missing.map { "\($0.identifier) (\($0.title))" }.joined(separator: ", ")
+                           + ". Ask it to place them, or add them yourself.", icon: "exclamationmark.triangle", warning: true)
                 }
                 if !plan.discarded.isEmpty {
                     VStack(alignment: .leading, spacing: Theme.Space.s) {
@@ -697,5 +772,36 @@ struct MorningView: View {
             ProgressView().controlSize(.small)
             Text(text).font(Theme.Text.body).foregroundStyle(Theme.Palette.textSecondary)
         }
+    }
+}
+
+/// What the auditor's last run said when it ended, in a popover: the sources it read and what it changed.
+struct AuditorOutputButton: View {
+    let run: Auditor.Run
+    let output: String
+    @State private var open = false
+
+    var body: some View {
+        Button { open.toggle() } label: { Label("What it said", systemImage: "text.bubble") }
+            .buttonStyle(QSHoverStyle())
+            .help("Read what the last run said when it ended")
+            .popover(isPresented: $open, arrowEdge: .bottom) {
+                VStack(alignment: .leading, spacing: Theme.Space.m) {
+                    HStack(spacing: Theme.Space.s) {
+                        QSLabel("Run \(run.number)", icon: "text.bubble", accent: true)
+                        Text([run.manual ? "started by hand" : "scheduled", run.ended.map { "ended " + QSDate.ago($0) }]
+                                .compactMap { $0 }.joined(separator: ", "))
+                            .font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
+                    }
+                    ScrollView {
+                        MarkdownBlock(output).font(Theme.Text.body)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .textSelection(.enabled)
+                    }
+                    .frame(maxHeight: 460)
+                }
+                .padding(Theme.Space.l)
+                .frame(width: 560)
+            }
     }
 }
