@@ -15,10 +15,13 @@ struct QuicksaveApp: App {
         MenuBarExtra {
             MenuView(store: store).onAppear { store.start() }
         } label: {
-            if let q = store.quest {
-                Label { Text("\(q.doneCount)/\(q.pieces.count)") } icon: { Image(nsImage: QSCrystalMark.image) }
-                    .labelStyle(.titleAndIcon)
-            } else { Image(nsImage: QSCrystalMark.image) }
+            Group {
+                if let q = store.quest {
+                    Label { Text("\(q.doneCount)/\(q.pieces.count)") } icon: { Image(nsImage: QSCrystalMark.image) }
+                        .labelStyle(.titleAndIcon)
+                } else { Image(nsImage: QSCrystalMark.image) }
+            }
+            .modifier(HotKeyInstaller())
         }
         .menuBarExtraStyle(.window)
 

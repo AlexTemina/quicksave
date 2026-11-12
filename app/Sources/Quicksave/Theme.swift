@@ -56,6 +56,8 @@ enum Theme {
         /// Quest colors: gold for the Main Quest, green for side quests.
         static let questMain = Color(hex: "#f5b82e")
         static let questSide = Color(hex: "#4cb782")
+        /// The glow around the window when the global shortcut brings Quicksave to the front.
+        static let summonGlow = Color(hex: "#f5b82e")
         /// What an agent is doing.
         static let agentWorking = Color(hex: "#f2c94c")
         static let agentWaiting = Color(hex: "#f28c38")
