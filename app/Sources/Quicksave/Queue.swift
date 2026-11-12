@@ -229,12 +229,14 @@ struct UnlinkedAgentCard: View {
     @State private var showDetail = false
 
     var body: some View {
-        QSCard(tint: agent.tint, pulsing: agent.state == "working", blinking: agent.state == "blocked", dashed: true, content: {
-            QSFlow { QSAgentTag(agent: agent) }
+        let unseen = store.isUnseen(agent)
+        QSCard(tint: agent.tint, pulsing: agent.state == "working", blinking: agent.state == "blocked", dashed: true,
+               faded: !unseen && (agent.state == "done" || agent.state == "monitoring"), content: {
+            QSFlow { QSAgentTag(agent: agent, unseen: unseen) }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .overlay(alignment: .topTrailing) {
                     QSHoverActions(visible: hovering) {
-                        OrcaButton(worktree: agent.match)
+                        OrcaButton(worktree: agent.match, onGo: { store.markSeen(agent) })
                         CloseAgentButton(agent: agent, store: store)
                     }
                 }
@@ -247,7 +249,7 @@ struct UnlinkedAgentCard: View {
             }
         }, onHoverChange: { hovering = $0 })
         .help(agent.lastMessage.isEmpty ? agent.name : "Agent: " + String(agent.lastMessage.prefix(300)))
-        .onTapGesture { showDetail = true }
+        .onTapGesture { store.markSeen(agent); showDetail = true }
         .popover(isPresented: $showDetail, arrowEdge: .bottom) {
             ScrollView { UnlinkedAgentDetail(agent: agent, store: store) }
                 .padding(Theme.Space.xl)

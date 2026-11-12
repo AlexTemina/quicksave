@@ -409,6 +409,21 @@ final class Store: ObservableObject {
     @Published var unlinkedAgents: [Orca.AgentState] = []
     private var agentTimer: Timer?
 
+    /// When he last looked at each agent from Quicksave, as the agent's own `updatedAt` at that moment, by agent key.
+    /// Only a click in Quicksave counts (the card, its detail, its Orca button); looking in Orca does not (12-nov).
+    @Published var agentSeen: [String: Double] = Database.shared.value("agent.seen", as: [String: Double].self) ?? [:]
+
+    /// The agent's turn ended and he has not looked at it from Quicksave since: a reply he has not seen.
+    func isUnseen(_ agent: Orca.AgentState) -> Bool {
+        (agent.state == "done" || agent.state == "monitoring") && agent.updatedAt > (agentSeen[agent.key] ?? 0)
+    }
+
+    func markSeen(_ agent: Orca.AgentState?) {
+        guard let agent, (agentSeen[agent.key] ?? 0) < agent.updatedAt else { return }
+        agentSeen[agent.key] = agent.updatedAt
+        Database.shared.setValue("agent.seen", agentSeen)
+    }
+
     private var agentsLoading = false
 
     /// Agents being closed from the app, by terminal, so their button shows it is busy.
@@ -434,6 +449,12 @@ final class Store: ObservableObject {
         let states = all.byIssue
         if states != agentStates { agentStates = states }
         if all.unlinked != unlinkedAgents { unlinkedAgents = all.unlinked }
+        // Forget the marks of agents that are gone. An empty read may be Orca failing, so it forgets nothing.
+        let live = Set(states.values.map(\.key) + all.unlinked.map(\.key))
+        if !live.isEmpty, agentSeen.keys.contains(where: { !live.contains($0) }) {
+            agentSeen = agentSeen.filter { live.contains($0.key) }
+            Database.shared.setValue("agent.seen", agentSeen)
+        }
         if !ciFixing.isEmpty { await followCIFixes(states) }
     }
     // MARK: Watching what waits

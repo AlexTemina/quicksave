@@ -170,6 +170,8 @@ enum Theme {
     enum Opacity {
         /// How strongly a state color paints a card, its breath when pulsing, and its border.
         static let tint: Double = 0.16
+        /// An agent whose reply he has already seen from Quicksave: the same color, faded, so new replies stand out.
+        static let tintSeen: Double = 0.07
         /// A working card breathes between almost clear and a strong yellow, so it reads as alive at a glance (9-nov).
         static let breathLow: Double = 0.04
         static let breathHigh: Double = 0.50

@@ -35,6 +35,8 @@ struct QSCard<Content: View>: View {
     var blinking = false
     /// A dashed edge and a lighter fill: something on the board that is not part of the plan.
     var dashed = false
+    /// The tint is faded: its state is one he has already seen.
+    var faded = false
     @ViewBuilder let content: Content
     @State private var hovering = false
     /// Lets the card's content show its actions only while the pointer is over it.
@@ -47,7 +49,7 @@ struct QSCard<Content: View>: View {
             .background(
                 RoundedRectangle(cornerRadius: Theme.Radius.m).fill(dashed ? Theme.Palette.well : Theme.Palette.surface)
                     .overlay(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(highlighted ? Theme.Palette.highlight : .clear))
-                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.m).fill((tint ?? .clear).opacity(pulsing || blinking ? Theme.Opacity.breathLow : Theme.Opacity.tint)))
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.m).fill((tint ?? .clear).opacity(pulsing || blinking ? Theme.Opacity.breathLow : faded ? Theme.Opacity.tintSeen : Theme.Opacity.tint)))
                     // The breath is its own view, there only while pulsing: when the state changes it is gone at once,
                     // instead of an endless animation carrying the old color on.
                     .overlay {
@@ -541,8 +543,11 @@ struct AgentReplyBox: View {
 
 struct QSAgentTag: View {
     let agent: Orca.AgentState
+    /// Its turn ended and he has not looked at it from Quicksave yet: a bell, like Orca's.
+    var unseen = false
 
     private var look: (text: String, icon: String, color: Color)? {
+        if unseen { return ("New reply", "bell.badge.fill", Theme.Palette.agentWaiting) }
         switch agent.state {
         case "working": return ("Working", Theme.Icon.agentLive, Theme.Palette.agentWorking)
         case "blocked": return ("Asks you", "questionmark.bubble.fill", Theme.Palette.agentAsking)
@@ -573,12 +578,15 @@ struct OrcaButton: View {
     var starting = false
     var onStart: (() -> Void)? = nil
     var onError: (String) -> Void = { _ in }
+    /// Runs when he goes to it, so the agent counts as seen.
+    var onGo: () -> Void = {}
     var body: some View {
         if starting {
             ProgressView().controlSize(.small).help("Starting: a worktree and an agent in Orca…")
         } else if let worktree {
             QSIconButton(systemImage: "terminal",
                          help: "Go to \(worktree.name) in Orca" + (worktree.liveAgentTerminal != nil ? " (agent live)" : "")) {
+                onGo()
                 Task { do { try await Orca.go(to: worktree) } catch { onError(error.localizedDescription) } }
             }
         } else if let onStart {

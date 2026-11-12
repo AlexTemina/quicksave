@@ -189,7 +189,10 @@ struct PieceCard: View {
     var body: some View {
         let worktree = store.worktrees[piece.id] ?? store.agentStates[piece.id]?.match
         let agent = store.agentStates[piece.id]
-        QSCard(tint: agent?.tint, pulsing: agent?.state == "working", blinking: agent?.state == "blocked", dashed: piece.isLoose, content: {
+        let unseen = agent.map(store.isUnseen) ?? false
+        let seenTurn = !unseen && (agent?.state == "done" || agent?.state == "monitoring")
+        QSCard(tint: agent?.tint, pulsing: agent?.state == "working", blinking: agent?.state == "blocked", dashed: piece.isLoose,
+               faded: seenTurn, content: {
             // Code, date and badges wrap to a new line in a narrow column instead of being squeezed.
             QSFlow {
                 if piece.isLoose {
@@ -200,6 +203,7 @@ struct PieceCard: View {
                         .help("Open in Orca (" + piece.openIn.map(\.name).joined(separator: ", ") + ") but not in today's plan")
                 }
                 Text(piece.id).font(Theme.Text.code).foregroundStyle(Theme.Palette.textSecondary).fixedSize()
+                if unseen, let agent { QSAgentTag(agent: agent, unseen: true) }
                 if let due = piece.dueDate { QSDue(ymd: due, done: piece.column == .done) }
                 PRStack(prs: piece.pullRequests, live: store.prStatus).fixedSize()
                 if store.agentStates[piece.id] == nil, worktree?.liveAgentTerminal != nil {
@@ -213,7 +217,7 @@ struct PieceCard: View {
                 QSHoverActions(visible: hovering) {
                     QSOpenLinkButton(url: piece.url)
                     OrcaButton(worktree: worktree, starting: store.startingAgents.contains(piece.id),
-                               onStart: { Task { await store.startAgent(piece) } })
+                               onStart: { Task { await store.startAgent(piece) } }, onGo: { store.markSeen(agent) })
                     if let agent { CloseAgentButton(agent: agent, store: store) }
                     if piece.isLoose {
                         if store.planWriting.contains(piece.id) { ProgressView().controlSize(.small) }
@@ -243,7 +247,7 @@ struct PieceCard: View {
             }
         }, onHoverChange: { hovering = $0 })
         .help(agent.map { a in a.lastMessage.isEmpty ? a.name : "Agent: " + String(a.lastMessage.prefix(300)) } ?? "")
-        .onTapGesture { showDetail = true }
+        .onTapGesture { store.markSeen(agent); showDetail = true }
         .popover(isPresented: $showDetail, arrowEdge: .bottom) {
             ScrollView {
                 PieceDetail(index: ((piece.isSide ? store.sideQuests : store.quest?.pieces ?? []).firstIndex { $0.id == piece.id } ?? 0) + 1, piece: piece,
@@ -326,7 +330,10 @@ struct PieceDetail: View {
                     if let agent = store.agentStates[piece.id] { CloseAgentButton(agent: agent, store: store) }
                 }
                 Text(piece.title).font(Theme.Text.heroTitle).fixedSize(horizontal: false, vertical: true)
-                if let agent = store.agentStates[piece.id] { AgentReplyBox(agent: agent) }
+                if let agent = store.agentStates[piece.id] {
+                    // A reply that arrives while the detail is open is seen.
+                    AgentReplyBox(agent: agent).onChange(of: agent.updatedAt) { store.markSeen(agent) }
+                }
                 if !piece.step.isEmpty {
                     HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                         Image(systemName: Theme.Icon.mainQuest).foregroundStyle(Theme.Palette.accent)
