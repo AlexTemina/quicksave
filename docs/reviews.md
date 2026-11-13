@@ -42,6 +42,13 @@ While it works, the row shows its state: running, ready or failed. The model is 
 - After publishing, every item is clearly marked as published or not published. Comments he adds later can be published in a second review, and the published ones stay marked.
 - This is the only place where Quicksave publishes anything, and it publishes only on his button.
 
+## After publishing (built 12-nov-2026)
+
+- Every refresh, Quicksave reads each published review on GitHub: answers in the threads of his comments, comments on the pull request's conversation by other people (bots left out), and new commits on the branch.
+- A pull request with something he has not seen goes to the top of the list, in "New activity", tagged with its new replies and new commits. Opening it marks them seen; what was new stays highlighted while he is there.
+- Each published comment shows its thread and a box to reply. His notes can also draft replies. Replies go out with the same Publish button, never alone, and are marked until they are posted.
+- New commits show a "Check the new commits" button. It brings the worktree to the branch as it is on GitHub and runs an agent (Opus 5.5, continuing the review's session) that marks each published comment as addressed or not, with one line on how, drafts replies, proposes new comments only for what is new, and suggests a verdict. Nothing is posted.
+
 ## Worktrees
 
 - Review worktrees are kept apart from work worktrees. They are children of one parent worktree in Orca, `⛔ PR reviews`, whose emoji says it must never be deleted.
@@ -50,7 +57,6 @@ While it works, the row shows its state: running, ready or failed. The model is 
 
 ## Not in this version
 
-- Replies to the author's answers and re-reviews after new commits.
 - Filing what the review taught about the domain into the vault. The copilot does this as its last step today: a vault pull request with how the product or component works, so the next review in the same domain starts with context. It stays out of the app for now.
 
 ## For development

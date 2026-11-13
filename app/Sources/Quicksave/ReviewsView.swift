@@ -18,8 +18,13 @@ struct ReviewsView: View {
 
     // MARK: List
 
-    private var mine: [ReviewRequest] { store.reviewRequests.filter { !$0.shared } }
-    private var shared: [ReviewRequest] { store.reviewRequests.filter(\.shared) }
+    /// Reviews where something happened on GitHub that he has not seen: they go first.
+    private var active: [PRReview] {
+        store.reviews.values.filter { !$0.unseenActivity.isEmpty }.sorted { $0.number < $1.number }
+    }
+    private var activeIds: Set<Int> { Set(active.map(\.number)) }
+    private var mine: [ReviewRequest] { store.reviewRequests.filter { !$0.shared && !activeIds.contains($0.number) } }
+    private var shared: [ReviewRequest] { store.reviewRequests.filter { $0.shared && !activeIds.contains($0.number) } }
 
     private var list: some View {
         ScrollView {
@@ -33,9 +38,10 @@ struct ReviewsView: View {
                 if store.reviewRequests.isEmpty && store.reviewedOnly.isEmpty {
                     QSEmptyState(icon: Theme.Icon.review, title: "Nothing to review", subtitle: "No pull request asks for you by name.")
                 }
+                group("New activity", active.map(Row.reviewed))
                 group("Asked of you", mine.map(Row.request))
                 group("Many reviewers", shared.map(Row.request))
-                group("Reviewed, still open", store.reviewedOnly.map(Row.reviewed))
+                group("Reviewed, still open", store.reviewedOnly.filter { !activeIds.contains($0.number) }.map(Row.reviewed))
             }
             .padding(Theme.Space.l)
         }
@@ -86,6 +92,16 @@ struct ReviewsView: View {
                     stateTag(n, r)
                 }
             }
+            if let r = review, !r.unseenActivity.isEmpty {
+                HStack(spacing: Theme.Space.s) {
+                    if r.newReplies > 0 {
+                        QSTag(text: r.newReplies == 1 ? "1 new reply" : "\(r.newReplies) new replies", icon: "bubble.left.fill", color: Theme.Palette.agentAsking)
+                    }
+                    if r.unseenActivity.contains(where: { $0.hasPrefix("h") }) {
+                        QSTag(text: r.newCommits == 1 ? "1 new commit" : "\(r.newCommits) new commits", icon: "arrow.triangle.branch", color: Theme.Palette.agentAsking)
+                    }
+                }
+            }
         }
     }
 
@@ -102,7 +118,7 @@ struct ReviewsView: View {
             case .failed: QSTag(text: "Failed", icon: "exclamationmark.triangle", color: Theme.Palette.prFailing)
             case .preparing: QSTag(text: "Preparing", icon: Theme.Icon.agentLive, color: Theme.Palette.agentWorking)
             case .ready:
-                if r.everPublished && r.pendingEvent == nil {
+                if r.everPublished && !r.hasPending {
                     QSTag(text: "Published", icon: Theme.Icon.published, color: Theme.Palette.published)
                 } else {
                     QSTag(text: "Ready", icon: "checkmark", color: Theme.Palette.accent)
@@ -142,6 +158,8 @@ private struct ReviewDetail: View {
     @ObservedObject var store: Store
     let pr: ReviewRequest
     @State private var confirming = false
+    /// Activity that was new when he opened it: still highlighted while he is here, already marked seen.
+    @State private var fresh: Set<String> = []
 
     private var review: PRReview? { store.reviews[pr.number] }
     private var busy: Bool { store.reviewBusy.contains(pr.number) }
@@ -159,6 +177,14 @@ private struct ReviewDetail: View {
             .padding(Theme.Space.xl)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .onAppear(perform: see)
+        .onChange(of: review?.activity ?? []) { see() }
+    }
+
+    private func see() {
+        guard let r = review else { return }
+        fresh.formUnion(r.unseenActivity)
+        store.markActivitySeen(pr.number)
     }
 
     // MARK: Header
@@ -227,6 +253,12 @@ private struct ReviewDetail: View {
                 QSWebPage(file: URL(fileURLWithPath: page))
                     .frame(height: Theme.Size.flowHeight)
                     .clipShape(RoundedRectangle(cornerRadius: Theme.Radius.s))
+            }
+        }
+        if r.newCommits > 0 || r.recheck != nil { commits(r) }
+        if let talk = r.conversation, !talk.isEmpty {
+            section("Conversation") {
+                ForEach(talk) { post($0, new: fresh.contains("c\($0.id)")) }
             }
         }
         section("Review") {
@@ -320,6 +352,22 @@ private struct ReviewDetail: View {
             } else {
                 editor(Binding(get: { c.text }, set: { v in edit(c.id) { $0.text = v } }), locked: locked)
             }
+            if let addressed = c.addressed {
+                Label(c.status ?? (addressed ? "Addressed" : "Not addressed yet"),
+                      systemImage: addressed ? "checkmark.circle.fill" : "exclamationmark.circle")
+                    .font(Theme.Text.meta).foregroundStyle(addressed ? Theme.Palette.published : Theme.Palette.warning)
+            }
+            if c.published != nil {
+                ForEach(c.thread ?? []) { post($0, new: fresh.contains("r\($0.id)")) }
+                HStack(alignment: .top, spacing: Theme.Space.s) {
+                    Image(systemName: "arrowshape.turn.up.left").foregroundStyle(Theme.Palette.textTertiary).padding(.top, Theme.Space.s)
+                    TextField("Reply in this thread", text: Binding(get: { c.reply ?? "" }, set: { v in replyEdit(c.id, v) }), axis: .vertical)
+                        .textFieldStyle(.plain).font(Theme.Text.body).lineLimit(1...10).disabled(busy)
+                        .padding(Theme.Space.s)
+                        .background(RoundedRectangle(cornerRadius: Theme.Radius.xs).fill(Theme.Palette.well))
+                    if c.pendingReply != nil { notPublishedTag }
+                }
+            }
         }
         .padding(Theme.Space.m)
         .background(RoundedRectangle(cornerRadius: Theme.Radius.s).fill(Theme.Palette.surface))
@@ -327,6 +375,52 @@ private struct ReviewDetail: View {
             .strokeBorder(c.published != nil ? Theme.Palette.published.opacity(0.6) : (c.touched ? Theme.Palette.touched : Theme.Palette.hairline),
                           lineWidth: c.published != nil || c.touched ? 1.2 : 0.5))
         .opacity(c.dropped ? 0.6 : 1)
+    }
+
+    private func replyEdit(_ id: String, _ text: String) {
+        store.editReview(pr.number) { r in
+            if let i = r.comments.firstIndex(where: { $0.id == id }) { r.comments[i].reply = text }
+        }
+    }
+
+    /// One message on GitHub: who, when, what. New ones are marked.
+    private func post(_ p: ThreadPost, new: Bool) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.xs) {
+            HStack(spacing: Theme.Space.s) {
+                Text(p.mine ? "You" : p.author).font(Theme.Text.label)
+                if let d = p.created { Text(QSDate.ago(d)).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textTertiary) }
+                if new { QSTag(text: "New", icon: "sparkle", color: Theme.Palette.agentAsking) }
+            }
+            MarkdownBlock(p.body).textSelection(.enabled)
+        }
+        .padding(Theme.Space.s)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.xs).fill(new ? Theme.Palette.agentAsking.opacity(0.08) : Theme.Palette.well))
+        .padding(.leading, Theme.Space.l)
+    }
+
+    /// The author pushed after his review: how many commits, and the button that checks them against his comments.
+    private func commits(_ r: PRReview) -> some View {
+        section("New commits") {
+            HStack(spacing: Theme.Space.m) {
+                if r.newCommits > 0 {
+                    Text(r.newCommits == 1 ? "1 commit since your review." : "\(r.newCommits) commits since your review.")
+                        .font(Theme.Text.body)
+                }
+                Spacer()
+                if busy && store.reviewSteps[pr.number] != "Publishing" {
+                    ProgressView().controlSize(.small)
+                    Text((store.reviewSteps[pr.number] ?? "Working") + "…").font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
+                } else if r.newCommits > 0 && r.recheckedHead != r.headNow {
+                    Button { Task { await store.recheckReview(pr.number) } } label: { Label("Check the new commits", systemImage: Theme.Icon.agentLive) }
+                        .buttonStyle(QSHoverStyle()).foregroundStyle(Theme.Palette.accent)
+                }
+            }
+            if let s = r.recheck {
+                Label(s, systemImage: "checkmark").font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
+            }
+            QSNote(text: "It updates the worktree, marks which of your comments were dealt with, drafts replies and proposes new comments. Nothing is posted.")
+        }
     }
 
     private func edit(_ id: String, _ change: @escaping (inout ReviewComment) -> Void) {
@@ -391,22 +485,24 @@ private struct ReviewDetail: View {
         let event = r.pendingEvent
         let count = r.unpublished.count
         let bodyPending = r.bodyPublished == nil && (!Reviews.withoutLegend(r.body).isEmpty || !r.everPublished)
+        let replies = r.pendingReplies.count
         let what = [event.map { r.everPublished && $0 == .comment ? nil : $0.title } ?? nil,
-                    bodyPending ? "main comment" : nil,
-                    count > 0 ? (count == 1 ? "1 comment" : "\(count) comments") : nil].compactMap { $0 }
+                    event != nil && bodyPending ? "main comment" : nil,
+                    count > 0 ? (count == 1 ? "1 comment" : "\(count) comments") : nil,
+                    replies > 0 ? (replies == 1 ? "1 reply" : "\(replies) replies") : nil].compactMap { $0 }
         return VStack(alignment: .trailing, spacing: Theme.Space.s) {
             if let notice = store.reviewNotice[pr.number] { QSNote(text: notice, icon: "exclamationmark.triangle", warning: true) }
             HStack {
                 if r.everPublished {
-                    QSNote(text: event == nil ? "Everything is published." : "Already published items are marked; only the rest goes now.",
+                    QSNote(text: !r.hasPending ? "Everything is published." : "Already published items are marked; only the rest goes now.",
                            icon: Theme.Icon.published)
                 } else {
                     QSNote(text: "Nothing reaches GitHub until you press Publish.")
                 }
                 Spacer()
-                QSPrimaryButton(title: event == nil ? "Published" : "Publish: " + what.joined(separator: " + "),
+                QSPrimaryButton(title: !r.hasPending ? "Published" : "Publish: " + what.joined(separator: " + "),
                                 icon: "paperplane.fill", busy: busy && store.reviewSteps[pr.number] == "Publishing",
-                                enabled: event != nil && !busy) { confirming = true }
+                                enabled: r.hasPending && !busy) { confirming = true }
             }
         }
         .confirmationDialog("Publish this review on GitHub?", isPresented: $confirming) {

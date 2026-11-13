@@ -45,6 +45,29 @@ struct ReviewComment: Codable, Identifiable, Hashable {
     var published: Date? = nil
     /// Changed by his notes and not looked at since.
     var touched = false
+    /// Its id on GitHub once published, to follow its thread.
+    var githubId: Int? = nil
+    /// The answers under it on GitHub, oldest first.
+    var thread: [ThreadPost]? = nil
+    /// His answer to the thread, not yet posted.
+    var reply: String? = nil
+    /// After new commits: whether the author dealt with it, and how, in one line.
+    var addressed: Bool? = nil
+    var status: String? = nil
+
+    var pendingReply: String? {
+        guard published != nil, let r = reply?.trimmingCharacters(in: .whitespacesAndNewlines), !r.isEmpty else { return nil }
+        return r
+    }
+}
+
+/// A message on GitHub: an answer in a comment's thread, or a comment on the pull request's conversation.
+struct ThreadPost: Codable, Hashable, Identifiable {
+    let id: Int
+    let author: String
+    let body: String
+    let created: Date?
+    let mine: Bool
 }
 
 /// The review of one pull request, as it lives in Quicksave until he publishes it.
@@ -72,6 +95,33 @@ struct PRReview: Codable {
     var session: String? = nil
     var cost: Double? = nil
     var started = Date()
+    /// Comments on the pull request's conversation by other people, since he started the review.
+    var conversation: [ThreadPost]? = nil
+    /// The branch when he last published, and now: new commits mean the author answered with code.
+    var headAtPublish: String? = nil
+    var commitsAtPublish: Int? = nil
+    var headNow: String? = nil
+    var commitsNow: Int? = nil
+    /// The head the last re-review looked at, and what it found.
+    var recheckedHead: String? = nil
+    var recheck: String? = nil
+    /// Activity he has already seen, by id (r<reply>, c<comment>, h<head>).
+    var seenActivity: [String]? = nil
+
+    var newCommits: Int {
+        guard let now = headNow, let then = headAtPublish, now != then else { return 0 }
+        return max(1, (commitsNow ?? 0) - (commitsAtPublish ?? 0))
+    }
+    /// Everything that happened on GitHub since he published, by id.
+    var activity: [String] {
+        let replies = comments.flatMap { $0.thread ?? [] }.filter { !$0.mine }.map { "r\($0.id)" }
+        let talk = (conversation ?? []).map { "c\($0.id)" }
+        return replies + talk + (newCommits > 0 ? ["h\(headNow ?? "")"] : [])
+    }
+    var unseenActivity: [String] { let seen = Set(seenActivity ?? []); return activity.filter { !seen.contains($0) } }
+    var newReplies: Int { unseenActivity.filter { $0.hasPrefix("r") || $0.hasPrefix("c") }.count }
+    var pendingReplies: [ReviewComment] { comments.filter { $0.pendingReply != nil } }
+    var hasPending: Bool { pendingEvent != nil || !pendingReplies.isEmpty }
 
     var everPublished: Bool { verdictPublished != nil }
     var unpublished: [ReviewComment] { comments.filter { !$0.dropped && $0.published == nil } }
@@ -149,27 +199,113 @@ enum Reviews {
         return obj["state"] as? String
     }
 
-    /// Posts what is kept and not yet published as one review. Returns what it posted.
-    static func publish(_ review: PRReview) async throws -> (event: ReviewVerdict, body: Bool, comments: [String]) {
-        guard let event = review.pendingEvent else { throw QuicksaveError.message("Nothing new to publish.") }
-        let body = withoutLegend(review.body)
-        // The first review always carries the main comment, with the legend under it. Later ones carry only what is new.
-        let sendBody = review.bodyPublished == nil && (!body.isEmpty || !review.everPublished)
-        if event == .requestChanges && !sendBody && review.bodyPublished == nil {
-            throw QuicksaveError.message("Requesting changes needs a main comment.")
+    /// Runs `gh` and returns what it printed, or throws what it said.
+    static func gh(_ args: [String]) async throws -> Data {
+        guard let gh = GitHub.binary else { throw QuicksaveError.message("The gh command is not installed.") }
+        let r = try await Shell.run(gh, args)
+        guard r.status == 0 else {
+            let said = String(data: r.err, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            throw QuicksaveError.message(said.isEmpty ? "gh failed" : said)
         }
-        let comments = review.unpublished
-        var payload: [String: Any] = ["event": event.rawValue,
-                                      "comments": comments.map { ["path": $0.path, "line": $0.line, "side": "RIGHT",
-                                                                  "body": "\($0.emoji) \($0.text)"] }]
-        if sendBody { payload["body"] = body.isEmpty ? legend : body + "\n\n" + legend }
-        let file = folder(review.number) + "/publish.json"
-        let data = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted])
-        try data.write(to: URL(fileURLWithPath: file))
-        if let failed = await GitHub.perform(["api", "--method", "POST", "repos/\(repo)/pulls/\(review.number)/reviews", "--input", file]) {
-            throw QuicksaveError.message("GitHub did not take the review: \(failed)")
+        return r.out
+    }
+
+    /// His GitHub login, read once.
+    nonisolated(unsafe) private static var cachedLogin: String?
+    static func login() async -> String? {
+        if let cachedLogin { return cachedLogin }
+        guard let data = try? await gh(["api", "user", "--jq", ".login"]) else { return nil }
+        cachedLogin = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return cachedLogin
+    }
+
+    /// The branch's head commit and how many commits the pull request has.
+    static func head(of number: Int) async -> (sha: String, commits: Int)? {
+        guard let data = try? await gh(["pr", "view", "\(number)", "--repo", repo, "--json", "headRefOid,commits"]),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let sha = obj["headRefOid"] as? String
+        else { return nil }
+        return (sha, (obj["commits"] as? [Any])?.count ?? 0)
+    }
+
+    struct RawComment: Decodable {
+        struct User: Decodable { let login: String; let type: String? }
+        let id: Int
+        let in_reply_to_id: Int?
+        let user: User?
+        let body: String
+        let created_at: String
+        let path: String?
+        let line: Int?
+        let original_line: Int?
+        let pull_request_review_id: Int?
+        var bot: Bool { user?.type == "Bot" || (user?.login.hasSuffix("[bot]") ?? false) }
+    }
+
+    /// Review comments of a pull request, and the comments of its conversation.
+    static func discussion(_ number: Int) async throws -> (review: [RawComment], talk: [RawComment]) {
+        let review = try JSONDecoder().decode([RawComment].self,
+                                              from: try await gh(["api", "repos/\(repo)/pulls/\(number)/comments?per_page=100"]))
+        let talk = try JSONDecoder().decode([RawComment].self,
+                                            from: try await gh(["api", "repos/\(repo)/issues/\(number)/comments?per_page=100"]))
+        return (review, talk)
+    }
+
+    struct Published {
+        let event: ReviewVerdict
+        let body: Bool
+        /// Our comment id to its GitHub id.
+        let comments: [String: Int]
+        let replies: [String: ThreadPost]
+        let head: (sha: String, commits: Int)?
+        let failedReplies: [String]
+    }
+
+    /// Posts what is kept and not yet published as one review, then his replies to threads. Returns what it posted.
+    static func publish(_ review: PRReview) async throws -> Published {
+        var event: ReviewVerdict = .comment
+        var sendBody = false
+        var ids: [String: Int] = [:]
+        if let pending = review.pendingEvent {
+            event = pending
+            let body = withoutLegend(review.body)
+            // The first review always carries the main comment, with the legend under it. Later ones carry only what is new.
+            sendBody = review.bodyPublished == nil && (!body.isEmpty || !review.everPublished)
+            if event == .requestChanges && !sendBody && review.bodyPublished == nil {
+                throw QuicksaveError.message("Requesting changes needs a main comment.")
+            }
+            let comments = review.unpublished
+            var payload: [String: Any] = ["event": event.rawValue,
+                                          "comments": comments.map { ["path": $0.path, "line": $0.line, "side": "RIGHT",
+                                                                      "body": "\($0.emoji) \($0.text)"] }]
+            if sendBody { payload["body"] = body.isEmpty ? legend : body + "\n\n" + legend }
+            let file = folder(review.number) + "/publish.json"
+            try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted]).write(to: URL(fileURLWithPath: file))
+            let out: Data
+            do { out = try await gh(["api", "--method", "POST", "repos/\(repo)/pulls/\(review.number)/reviews", "--input", file]) }
+            catch { throw QuicksaveError.message("GitHub did not take the review: \(error.localizedDescription)") }
+            // Each comment's GitHub id, to follow its thread.
+            if let reviewId = (try? JSONSerialization.jsonObject(with: out) as? [String: Any])?["id"] as? Int,
+               let data = try? await gh(["api", "repos/\(repo)/pulls/\(review.number)/reviews/\(reviewId)/comments?per_page=100"]),
+               let posted = try? JSONDecoder().decode([RawComment].self, from: data) {
+                for c in comments {
+                    if let g = posted.first(where: { $0.path == c.path && $0.body.hasPrefix(c.emoji) && $0.body.contains(c.text.prefix(40)) }) {
+                        ids[c.id] = g.id
+                    }
+                }
+            }
         }
-        return (event, sendBody, comments.map(\.id))
+        var replies: [String: ThreadPost] = [:]
+        var failed: [String] = []
+        for c in review.pendingReplies {
+            guard let gid = c.githubId, let text = c.pendingReply else { failed.append("\(c.path):\(c.line)"); continue }
+            do {
+                let out = try await gh(["api", "--method", "POST", "repos/\(repo)/pulls/\(review.number)/comments/\(gid)/replies", "-f", "body=\(text)"])
+                let id = (try? JSONSerialization.jsonObject(with: out) as? [String: Any])?["id"] as? Int ?? 0
+                replies[c.id] = ThreadPost(id: id, author: await login() ?? "you", body: text, created: Date(), mine: true)
+            } catch { failed.append("\(c.path):\(c.line)") }
+        }
+        return Published(event: event, body: sendBody, comments: ids, replies: replies, head: await head(of: review.number),
+                         failedReplies: failed)
     }
 
     // MARK: Worktrees
@@ -202,6 +338,13 @@ enum Reviews {
                                           "--setup", "skip", "--json"])
         guard let path = findPath(in: created) else { throw QuicksaveError.message("Orca did not say where the reviews parent worktree is.") }
         return path
+    }
+
+    /// Brings the review worktree to the branch as it is now on GitHub. It is a review-only checkout: nothing local to keep.
+    static func updateWorktree(_ path: String, branch b: String) async throws {
+        try await gitStep(path, ["fetch", "origin", b])
+        try await gitStep(path, ["checkout", "-B", b, "--track", "origin/\(b)"])
+        try await gitStep(path, ["reset", "--hard", "origin/\(b)"])
     }
 
     static func removeWorktree(_ path: String) async {
@@ -337,12 +480,13 @@ extension AgentJob {
             >>>
             - comments not yet published:
             \(json(open))
-            \(done.isEmpty ? "" : "- comments already published, read-only, never return them:\n" + json(done))
+            \(done.isEmpty ? "" : "- comments already published, read-only, never return them in `comments`. Their threads on GitHub, with any answer he drafted:\n" + AgentJob.threads(done))
 
             Rules:
             - Return every not-yet-published comment, with its id, changed or not. To drop one, set dropped true. A new comment has no id.
             - A new comment must sit on a line ADDED by the diff: check with `git diff origin/\(review.baseRef)...HEAD -- <file>`. If what he says is about the whole pull request, it goes in the main comment.
             - Never add a link to the emoji legend: Quicksave adds it when he publishes.
+            - If his notes answer someone in the thread of a published comment, return it in `replies`: the id of that published comment and the full text of his answer (it replaces any draft he had there).
             - Turn his words into clean review comments in his voice: English, short, direct, no em-dashes. Keep his meaning, do not add opinions he did not give. The emoji follows the weight he gives it.
             - Change the verdict only if his notes say so or plainly imply it.
             - summary: one sentence on what you changed.
@@ -353,9 +497,60 @@ extension AgentJob {
             allowed: reviewReads,
             denied: reviewNever + ["Edit", "Write"],
             schema: """
-            {"type":"object","properties":{"verdict":{"type":"string","enum":["APPROVE","COMMENT","REQUEST_CHANGES"]},"body":{"type":"string"},"comments":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"path":{"type":"string"},"line":{"type":"integer"},"emoji":{"type":"string"},"text":{"type":"string"},"dropped":{"type":"boolean"}},"required":["path","line","emoji","text"]}},"summary":{"type":"string"}},"required":["verdict","body","comments","summary"]}
+            {"type":"object","properties":{"verdict":{"type":"string","enum":["APPROVE","COMMENT","REQUEST_CHANGES"]},"body":{"type":"string"},"comments":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"path":{"type":"string"},"line":{"type":"integer"},"emoji":{"type":"string"},"text":{"type":"string"},"dropped":{"type":"boolean"}},"required":["path","line","emoji","text"]}},"replies":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"]}},"summary":{"type":"string"}},"required":["verdict","body","comments","summary"]}
             """,
             maxTurns: 40,
+            resume: review.session)
+    }
+}
+
+extension AgentJob {
+    /// Published comments with their GitHub threads, for an agent to read.
+    static func threads(_ comments: [ReviewComment]) -> String {
+        comments.map { c in
+            var lines = ["[id \(c.id)] \(c.path):\(c.line) \(c.emoji) \(c.text)"]
+            for p in c.thread ?? [] { lines.append("    \(p.mine ? "Alejandro" : p.author): \(p.body)") }
+            if let r = c.pendingReply { lines.append("    (his draft answer, not posted) \(r)") }
+            return lines.joined(separator: "\n")
+        }.joined(separator: "\n")
+    }
+
+    /// After the author pushed new commits: checks each of his published comments against them, drafts answers to the
+    /// threads, and proposes new comments only for what is new. It continues the session that prepared the review.
+    static func reviewRecheck(_ review: PRReview) -> AgentJob {
+        let published = review.comments.filter { $0.published != nil }
+        return AgentJob(
+            name: "review recheck #\(review.number)",
+            directory: review.worktree ?? NSTemporaryDirectory(),
+            prompt: """
+            The author of pull request #\(review.number) "\(review.title)" pushed new commits after Alejandro published his review. The worktree now holds the branch as it is on GitHub. Check them for him. He decides everything in Quicksave; you never post anything.
+
+            What changed since his review: `git diff \(review.headAtPublish ?? "origin/\(review.baseRef)")..HEAD` (and `git log` over the same range).
+            The whole pull request, for line numbers: `git diff origin/\(review.baseRef)...HEAD`.
+
+            His published comments and their threads on GitHub:
+            \(AgentJob.threads(published))
+
+            \((review.conversation ?? []).isEmpty ? "" : "The pull request's conversation since:\n" + (review.conversation ?? []).map { "    \($0.author): \($0.body)" }.joined(separator: "\n"))
+
+            Return:
+            - statuses: one per published comment above, by its id: addressed (true when the new code or the author's answer deals with it) and status, one short line saying how or what is still missing.
+            - replies: for a thread where the author answered and a short answer from him makes sense (thanks, a follow-up question, agreeing), the comment's id and the text, in his voice. Leave out threads that need nothing.
+            - comments: new comments only for problems the new commits introduce, on lines ADDED by the whole pull request's diff (check with git diff), at most 4, often none. Path, line, emoji from the legend, text without the emoji.
+            - verdict: APPROVE, COMMENT or REQUEST_CHANGES, what you now recommend.
+            - summary: one or two sentences for him: what the new commits did with his review.
+
+            English, short, direct, no em-dashes, every issue or PR code with a 2-3 word tag. No link to the emoji legend.
+
+            \(Morning.howToRun)
+            """,
+            model: "claude-opus-5-5",
+            allowed: reviewReads,
+            denied: reviewNever + ["Edit", "Write"],
+            schema: """
+            {"type":"object","properties":{"statuses":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"addressed":{"type":"boolean"},"status":{"type":"string"}},"required":["id","addressed","status"]}},"replies":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"]}},"comments":{"type":"array","items":{"type":"object","properties":{"path":{"type":"string"},"line":{"type":"integer"},"emoji":{"type":"string"},"text":{"type":"string"}},"required":["path","line","emoji","text"]}},"verdict":{"type":"string","enum":["APPROVE","COMMENT","REQUEST_CHANGES"]},"summary":{"type":"string"}},"required":["statuses","comments","verdict","summary"]}
+            """,
+            maxTurns: 80,
             resume: review.session)
     }
 }
@@ -371,10 +566,21 @@ struct ReviewPrepareResult: Decodable {
 }
 
 struct ReviewNotesResult: Decodable {
+    struct Reply: Decodable { let id: String; let text: String }
     struct Comment: Decodable { let id: String?; let path: String; let line: Int; let emoji: String; let text: String; let dropped: Bool? }
     let verdict: String
     let body: String
     let comments: [Comment]
+    let replies: [Reply]?
+    let summary: String
+}
+
+struct ReviewRecheckResult: Decodable {
+    struct Status: Decodable { let id: String; let addressed: Bool; let status: String }
+    let statuses: [Status]
+    let comments: [ReviewNotesResult.Comment]
+    let replies: [ReviewNotesResult.Reply]?
+    let verdict: String
     let summary: String
 }
 
@@ -442,6 +648,8 @@ extension Store {
             saveReviews()
             if reviewOpen == n { reviewOpen = nil }
         }
+        // Published reviews: answers, conversation and new commits.
+        for (n, r) in reviews where r.everPublished && !reviewBusy.contains(n) { await followReview(n) }
     }
 
     func startReview(_ pr: ReviewRequest) async {
@@ -510,6 +718,9 @@ extension Store {
                                                         dropped: c.dropped ?? false, touched: true))
                     }
                 }
+                for rp in result.replies ?? [] {
+                    if let i = r.comments.firstIndex(where: { $0.id == rp.id }), r.comments[i].published != nil { r.comments[i].reply = rp.text }
+                }
                 r.lastChange = result.summary
                 r.notes = ""
                 if let s = run.sessionId { r.session = s }
@@ -526,15 +737,100 @@ extension Store {
         reviewSteps[number] = "Publishing"
         reviewNotice[number] = nil
         do {
+            let reviewPending = review.pendingEvent != nil
             let sent = try await Reviews.publish(review)
             let now = Date()
             editReview(number) { r in
-                r.verdictPublished = sent.event == .comment && r.verdictPublished != nil ? r.verdictPublished : sent.event
-                if sent.body { r.bodyPublished = now }
-                for i in r.comments.indices where sent.comments.contains(r.comments[i].id) {
-                    r.comments[i].published = now
-                    r.comments[i].touched = false
+                if reviewPending {
+                    if sent.event != .comment || r.verdictPublished == nil { r.verdictPublished = sent.event }
+                    if sent.body { r.bodyPublished = now }
+                    for i in r.comments.indices where r.comments[i].published == nil && !r.comments[i].dropped {
+                        r.comments[i].published = now
+                        r.comments[i].touched = false
+                        r.comments[i].githubId = sent.comments[r.comments[i].id]
+                    }
+                    // New commits are counted from here.
+                    if let h = sent.head { r.headAtPublish = h.sha; r.commitsAtPublish = h.commits; r.headNow = h.sha; r.commitsNow = h.commits }
                 }
+                for i in r.comments.indices {
+                    guard let post = sent.replies[r.comments[i].id] else { continue }
+                    r.comments[i].thread = (r.comments[i].thread ?? []) + [post]
+                    r.comments[i].reply = nil
+                }
+            }
+            if !sent.failedReplies.isEmpty {
+                reviewNotice[number] = "Some replies could not be posted: \(sent.failedReplies.joined(separator: ", ")). They are still here."
+            }
+        } catch {
+            reviewNotice[number] = error.localizedDescription
+        }
+    }
+
+    /// Reads what happened on GitHub since he published: answers in his threads, the conversation, new commits.
+    func followReview(_ number: Int) async {
+        guard let review = reviews[number], review.everPublished, let me = await Reviews.login(),
+              let d = try? await Reviews.discussion(number) else { return }
+        let head = await Reviews.head(of: number)
+        editReview(number) { r in
+            for i in r.comments.indices where r.comments[i].published != nil {
+                let c = r.comments[i]
+                // Published before ids were kept: find it among his own comments.
+                if c.githubId == nil, let g = d.review.first(where: { $0.in_reply_to_id == nil && $0.user?.login == me
+                    && $0.path == c.path && $0.body.contains(c.text.prefix(40)) }) {
+                    r.comments[i].githubId = g.id
+                }
+                guard let gid = r.comments[i].githubId else { continue }
+                r.comments[i].thread = d.review.filter { $0.in_reply_to_id == gid && !$0.bot }
+                    .map { ThreadPost(id: $0.id, author: $0.user?.login ?? "", body: $0.body, created: QSDate.parse($0.created_at),
+                                      mine: $0.user?.login == me) }
+            }
+            r.conversation = d.talk.filter { !$0.bot && $0.user?.login != me && (QSDate.parse($0.created_at) ?? .distantPast) > r.started }
+                .map { ThreadPost(id: $0.id, author: $0.user?.login ?? "", body: $0.body, created: QSDate.parse($0.created_at), mine: false) }
+            if let head {
+                r.headNow = head.sha; r.commitsNow = head.commits
+                // Published before the head was kept: new commits count from the first look.
+                if r.headAtPublish == nil { r.headAtPublish = head.sha; r.commitsAtPublish = head.commits }
+            }
+        }
+    }
+
+    func markActivitySeen(_ number: Int) {
+        guard let r = reviews[number], !r.unseenActivity.isEmpty else { return }
+        editReview(number) { $0.seenActivity = Array(Set(($0.seenActivity ?? []) + $0.activity)) }
+    }
+
+    /// Looks at the commits pushed since he published: did they deal with his comments, is there anything new to say.
+    func recheckReview(_ number: Int) async {
+        guard let review = reviews[number], let worktree = review.worktree, !reviewBusy.contains(number) else { return }
+        reviewBusy.insert(number)
+        defer { reviewBusy.remove(number); reviewSteps[number] = nil }
+        reviewNotice[number] = nil
+        do {
+            reviewSteps[number] = "Updating the worktree"
+            try await Reviews.updateWorktree(worktree, branch: review.headRef)
+            let run = try await Agents.run(.reviewRecheck(review)) { step in
+                Task { @MainActor [weak self] in self?.reviewSteps[number] = step }
+            }
+            guard let result = try? JSONDecoder().decode(ReviewRecheckResult.self, from: Data(run.resultJSON.utf8)) else {
+                throw QuicksaveError.message("The agent's result could not be read.")
+            }
+            editReview(number) { r in
+                for st in result.statuses {
+                    guard let i = r.comments.firstIndex(where: { $0.id == st.id }) else { continue }
+                    r.comments[i].addressed = st.addressed
+                    r.comments[i].status = st.status
+                }
+                for rp in result.replies ?? [] {
+                    guard let i = r.comments.firstIndex(where: { $0.id == rp.id }), r.comments[i].pendingReply == nil else { continue }
+                    r.comments[i].reply = rp.text
+                }
+                for c in result.comments {
+                    r.comments.append(ReviewComment(path: c.path, line: c.line, emoji: c.emoji, text: c.text, touched: true))
+                }
+                if let v = ReviewVerdict(rawValue: result.verdict) { r.verdict = v }
+                r.recheck = result.summary
+                r.recheckedHead = r.headNow
+                if let s = run.sessionId { r.session = s }
             }
         } catch {
             reviewNotice[number] = error.localizedDescription
