@@ -916,3 +916,53 @@ struct QSWebPage: NSViewRepresentable {
         }
     }
 }
+
+/// A macOS-style badge: a white number on a red circle, widening into a capsule for bigger numbers.
+struct QSBadge: View {
+    let count: Int
+    var body: some View {
+        Text(count > 99 ? "99+" : "\(count)")
+            .font(Theme.Text.badge)
+            .foregroundStyle(Theme.Palette.onAccent)
+            .padding(.horizontal, count > 9 ? Theme.Space.xs + 1 : 0)
+            .frame(minWidth: Theme.Size.badge, minHeight: Theme.Size.badge)
+            .background(Capsule().fill(Theme.Palette.badge))
+            .fixedSize()
+    }
+}
+
+/// The window's tabs, with how many items each has and a badge for the new ones he has not seen yet.
+struct QSTabBar<Tab: Hashable>: View {
+    struct Item: Identifiable {
+        let tab: Tab
+        let title: String
+        var count = 0
+        var new = 0
+        var id: Tab { tab }
+    }
+    let items: [Item]
+    @Binding var selection: Tab
+
+    var body: some View {
+        HStack(spacing: Theme.Space.xs) {
+            ForEach(items) { item in
+                let selected = item.tab == selection
+                Button { selection = item.tab } label: {
+                    HStack(spacing: Theme.Space.xs + 2) {
+                        Text(item.title).font(Theme.Text.cardTitle.weight(selected ? .semibold : .regular))
+                        if item.count > 0 {
+                            Text("\(item.count)").font(Theme.Text.meta.monospacedDigit()).foregroundStyle(Theme.Palette.textSecondary)
+                        }
+                        if item.new > 0 { QSBadge(count: item.new) }
+                    }
+                    .padding(.horizontal, Theme.Space.m).padding(.vertical, Theme.Space.xs + 1)
+                    .background(RoundedRectangle(cornerRadius: Theme.Radius.s).fill(selected ? Theme.Palette.surface : .clear)
+                        .shadow(color: selected ? Theme.Palette.shadow : .clear, radius: 2, y: 1))
+                }
+                .buttonStyle(QSHoverStyle(padding: 0, backdrop: !selected))
+            }
+        }
+        .padding(Theme.Space.xs - 1)
+        .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(Theme.Palette.well))
+    }
+}

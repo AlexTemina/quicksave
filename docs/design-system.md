@@ -7,6 +7,12 @@ Native macOS, sober. Light and dark mode come from the system's semantic colors.
 - Screens use components and tokens, never raw styling. Changing the look of the whole app is changing the tokens.
 - State colors are Linear's own, read live from the workspace.
 
+## Tabs and what is new (12-nov)
+
+- The tabs on top (Today, Inbox, Reviews, Drafts) say how many items each has and, in a red macOS-style badge (just the number), how many are new since he last looked at that tab.
+- New means an item he has not seen in that tab: a new piece, side quest or collectible, or a card that moved, in Today; a new card in Inbox; a new pull request, reply or commit in Reviews; a new draft in Drafts.
+- The tab in front, with the window active, has nothing new. Replies and commits in Reviews stay new until he opens that pull request.
+
 ## Talking to the AI (11-nov)
 
 Every place where he writes a prompt and an AI acts uses one conversation, so they all look and behave the same:

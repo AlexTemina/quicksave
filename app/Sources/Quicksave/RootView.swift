@@ -13,18 +13,16 @@ struct RootView: View {
             case .drafts: DraftsView(store: store)
             }
         }
+        .onChange(of: store.tab) { old, new in store.markSeen(old); store.markSeen(new) }
         .sheet(isPresented: $store.morningOpen) { MorningView(store: store) }
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Picker("", selection: $store.tab) {
-                    Text("Today").tag(AppTab.today)
-                    Text(store.pendingCards.isEmpty ? "Inbox" : "Inbox · \(store.pendingCards.count)").tag(AppTab.inbox)
-                    Text(store.reviewRequests.isEmpty ? "Reviews" : "Reviews · \(store.reviewRequests.count)").tag(AppTab.reviews)
-                    Text(store.drafts.isEmpty ? "Drafts" : "Drafts · \(store.drafts.count)").tag(AppTab.drafts)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 440)
+                QSTabBar(items: [
+                    .init(tab: .today, title: "Today", new: store.newCount(.today)),
+                    .init(tab: .inbox, title: "Inbox", count: store.pendingCards.count, new: store.newCount(.inbox)),
+                    .init(tab: .reviews, title: "Reviews", count: store.reviewRequests.count, new: store.newCount(.reviews)),
+                    .init(tab: .drafts, title: "Drafts", count: store.drafts.count, new: store.newCount(.drafts)),
+                ], selection: $store.tab)
             }
         }
     }

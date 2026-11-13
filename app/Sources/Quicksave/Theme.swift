@@ -67,6 +67,8 @@ enum Theme {
         /// A review comment already on GitHub, and one his notes just changed.
         static let published = prOpen
         static let touched = Color(hex: "#f2c94c")
+        /// New items in a tab he has not looked at yet.
+        static let badge = prFailing
     }
 
     enum Text {
@@ -78,11 +80,13 @@ enum Theme {
         static let label = Font.system(size: 11, weight: .semibold)
         static let micro = Font.system(size: 10.5, weight: .semibold)
         static let code = Font.system(size: 11, weight: .medium, design: .monospaced)
+        static let badge = Font.system(size: 10.5, weight: .bold).monospacedDigit()
         static let number = Font.system(size: 13, weight: .semibold, design: .rounded).monospacedDigit()
     }
 
     enum Size {
         static let dot: CGFloat = 8
+        static let badge: CGFloat = 17
         static let smallDot: CGFloat = 6
         static let columnMin: CGFloat = 150
         static let columnMax: CGFloat = 400

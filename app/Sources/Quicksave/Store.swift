@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import Foundation
 
-enum AppTab: Hashable { case today, inbox, reviews, drafts }
+enum AppTab: String, Hashable, CaseIterable { case today, inbox, reviews, drafts }
 
 @MainActor
 final class Store: ObservableObject {
@@ -603,6 +603,9 @@ final class Store: ObservableObject {
     @Published var reviewNotice: [Int: String] = [:]
     @Published var reviewOpen: Int?
     @Published var reviewsError: String?
+
+    /// What he has already seen in each tab, by item id, so the tab bar can say what is new. See docs/design-system.md.
+    @Published var seenItems: [AppTab: Set<String>] = Store.savedSeen()
     @Published var error: String?
     @Published var loading = false
     @Published var lastRefresh: Date?
@@ -686,6 +689,7 @@ final class Store: ObservableObject {
             }
             prStatus = statuses
             await refreshAgents()
+            updateSeen()
             Snapshot.boardIfAsked(self)
         } catch {
             self.error = error.localizedDescription
