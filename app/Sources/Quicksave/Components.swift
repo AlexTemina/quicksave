@@ -37,6 +37,9 @@ struct QSCard<Content: View>: View {
     var dashed = false
     /// The tint is faded: its state is one he has already seen.
     var faded = false
+    /// Finished for good: done, with nothing left open in Orca. Sunk into the column, washed in the finished color,
+    /// its content dimmed, so it reads as settled at a glance (13-nov).
+    var finished = false
     @ViewBuilder let content: Content
     @State private var hovering = false
     /// Lets the card's content show its actions only while the pointer is over it.
@@ -44,10 +47,12 @@ struct QSCard<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Theme.Space.s) { content }
+            .opacity(finished ? Theme.Opacity.finishedContent : 1)
             .padding(Theme.Space.m)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
-                RoundedRectangle(cornerRadius: Theme.Radius.m).fill(dashed ? Theme.Palette.well : Theme.Palette.surface)
+                RoundedRectangle(cornerRadius: Theme.Radius.m).fill(dashed || finished ? Theme.Palette.well : Theme.Palette.surface)
+                    .overlay(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(finished ? Theme.Palette.finished.opacity(Theme.Opacity.finishedWash) : .clear))
                     .overlay(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(highlighted ? Theme.Palette.highlight : .clear))
                     .overlay(RoundedRectangle(cornerRadius: Theme.Radius.m).fill((tint ?? .clear).opacity(pulsing || blinking ? Theme.Opacity.breathLow : faded ? Theme.Opacity.tintSeen : Theme.Opacity.tint)))
                     // The breath is its own view, there only while pulsing: when the state changes it is gone at once,
@@ -56,10 +61,22 @@ struct QSCard<Content: View>: View {
                         if blinking, let tint { QSBreath(color: tint, radius: Theme.Radius.m, motion: Theme.Motion.blink).id("blink") }
                         else if pulsing, let tint { QSBreath(color: tint, radius: Theme.Radius.m).id(tint) }
                     }
-                    .shadow(color: hovering ? Theme.Palette.shadowHover : Theme.Palette.shadow, radius: hovering ? 8 : 3, y: hovering ? 3 : 1)
+                    .shadow(color: hovering ? Theme.Palette.shadowHover : finished ? .clear : Theme.Palette.shadow, radius: hovering ? 8 : 3, y: hovering ? 3 : 1)
             )
+            // The finished seal, stamped on the right edge, tilted like a rubber stamp.
+            .overlay(alignment: .trailing) {
+                if finished {
+                    Image(systemName: "checkmark.seal.fill")
+                        .font(.system(size: Theme.Size.stampSize))
+                        .foregroundStyle(Theme.Palette.finished.opacity(Theme.Opacity.stamp))
+                        .rotationEffect(.degrees(Theme.Size.stampTilt))
+                        .padding(.trailing, Theme.Space.m)
+                        .allowsHitTesting(false)
+                        .help("Done in Linear, with no worktree or agent left open in Orca")
+                }
+            }
             .overlay(RoundedRectangle(cornerRadius: Theme.Radius.m)
-                .strokeBorder(dashed ? Theme.Palette.textTertiary : Theme.Palette.hairline,
+                .strokeBorder(dashed ? Theme.Palette.textTertiary : finished ? Theme.Palette.finished.opacity(Theme.Opacity.tint) : Theme.Palette.hairline,
                               style: StrokeStyle(lineWidth: dashed ? 1.2 : 0.5, dash: dashed ? [5, 4] : [])))
             .scaleEffect(hovering ? 1.01 : 1)
             .animation(Theme.Motion.hover, value: hovering)

@@ -191,8 +191,10 @@ struct PieceCard: View {
         let agent = store.agentStates[piece.id]
         let unseen = agent.map(store.isUnseen) ?? false
         let seenTurn = !unseen && (agent?.state == "done" || agent?.state == "monitoring")
+        // Done with no worktree and no agent left in Orca: nothing more to do or to close.
+        let finished = piece.column == .done && !piece.isLoose && worktree == nil && agent == nil
         QSCard(tint: agent?.tint, pulsing: agent?.state == "working", blinking: agent?.state == "blocked", dashed: piece.isLoose,
-               faded: seenTurn, content: {
+               faded: seenTurn, finished: finished, content: {
             // Code, date and badges wrap to a new line in a narrow column instead of being squeezed.
             QSFlow {
                 if piece.isLoose {

@@ -15,6 +15,7 @@ What the app shows, and nothing else yet.
 - Dragging a card to another column moves its issue to that state in Linear, in either board. The card shows in its new column at once, faded, until Linear confirms and the board refreshes; if Linear refuses, a note says why and the card goes back.
 - Empty columns show only their dot and name, sideways. When a board has an empty column, columns with cards stop growing at a set width and the empty ones take the rest, so every state keeps its place and Done stays on the right. Three done pieces filling three quarters of the row did not look done (9-nov).
 - Everything clickable reacts on hover.
+- A done card with no worktree and no agent left in Orca is finished for good: it sinks into the column (no shadow), takes a soft purple wash and edge, dims its content and carries a big purple seal stamped on its right edge, tilted, with no text. Done pieces stay on the Main Quest's board while it lives, so after days on the same Main Quest the settled ones must read apart from those still holding a worktree (13-nov).
 
 ## Going to Orca
 

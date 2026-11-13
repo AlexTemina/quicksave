@@ -67,6 +67,8 @@ enum Theme {
         /// A review comment already on GitHub, and one his notes just changed.
         static let published = prOpen
         static let touched = Color(hex: "#f2c94c")
+        /// A card finished for good: done in Linear, nothing left open in Orca. The merged pull request's purple.
+        static let finished = prMerged
         /// New items in a tab he has not looked at yet.
         static let badge = prFailing
     }
@@ -88,6 +90,9 @@ enum Theme {
         static let dot: CGFloat = 8
         static let badge: CGFloat = 17
         static let smallDot: CGFloat = 6
+        /// The finished seal on a card: big like a stamp, a little tilted.
+        static let stampSize: CGFloat = 34
+        static let stampTilt: Double = -12
         static let columnMin: CGFloat = 150
         static let columnMax: CGFloat = 400
         static let columnCollapsed: CGFloat = 34
@@ -179,6 +184,11 @@ enum Theme {
         /// A working card breathes between almost clear and a strong yellow, so it reads as alive at a glance (9-nov).
         static let breathLow: Double = 0.04
         static let breathHigh: Double = 0.50
+        /// A finished card: how strongly its color washes it, and how much its content stays visible.
+        static let finishedWash: Double = 0.10
+        static let finishedContent: Double = 0.6
+        /// The finished seal stamped on the card.
+        static let stamp: Double = 0.55
     }
 
     enum Leading {
