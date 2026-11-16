@@ -69,7 +69,7 @@ Orca owns which worktree belongs to which issue (`orca reference find <issue>`).
 ## Open, not planned
 
 - Everything open in Orca that belongs to an issue not on the board (not the Main Quest, one of its pieces or a side quest of today) shows on the side quests' board, so nothing open escapes Quicksave:
-  - every open worktree, except main checkouts and the vault's fixed automation worktrees (🚫);
+  - every open worktree, except main checkouts, the vault's fixed automation worktrees (🚫) and the PR review worktrees (`⛔ PR reviews` and everything under it), which live in [Reviews](reviews.md);
   - every live agent whose conversation is named after an issue ("ES-12986 — …"), wherever it runs, as in the vault's or alan-apps' main checkout (12-nov).
 - A worktree's issue comes from its Linear link in Orca, else the code its name or branch starts with (ES-12279-…, alextemina/temi-480-…), else its parent worktree's, else the code its live agent's conversation starts with.
 - Agents no issue names (a conversation in the vault's main checkout, say) are not on the board.

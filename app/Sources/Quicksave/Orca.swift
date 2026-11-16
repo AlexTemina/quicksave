@@ -264,7 +264,7 @@ enum Orca {
 
     /// Everything he has open in Orca that belongs to an issue, so nothing open escapes the board:
     /// - every worktree: not archived, not a repository's main checkout, and not the fixed worktrees of the vault's
-    ///   automations (named with 🚫);
+    ///   automations (named with 🚫), and not the PR review worktrees (under "⛔ PR reviews");
     /// - every live agent whose conversation is named after an issue ("ES-12986 — …") when the worktree it runs in
     ///   does not already stand for that issue, as in the vault's or alan-apps' main checkout.
     /// Agents in a main checkout with no issue in their name are left out.
@@ -297,10 +297,22 @@ enum Orca {
             }
         }
         let byId = Dictionary(all.compactMap { w in (w["worktreeId"] as? String).map { ($0, w) } }, uniquingKeysWith: { a, _ in a })
+        /// The reviews parent and every review worktree under it belong to the Reviews tab, never to the board.
+        func isReview(_ w: [String: Any]) -> Bool {
+            var cur: [String: Any]? = w
+            var seen = Set<String>()
+            while let c = cur {
+                if (c["displayName"] as? String) == Reviews.parentName { return true }
+                guard let p = c["parentWorktreeId"] as? String, seen.insert(p).inserted else { return false }
+                cur = byId[p]
+            }
+            return false
+        }
         var out: [OpenWorktree] = []
         for w in all {
             let name = w["displayName"] as? String ?? ""
-            guard (w["isArchived"] as? Bool) != true, !name.hasPrefix("🚫"), let id = w["worktreeId"] as? String else { continue }
+            guard (w["isArchived"] as? Bool) != true, !name.hasPrefix("🚫"), !isReview(w),
+                  let id = w["worktreeId"] as? String else { continue }
             let main = (w["isMainWorktree"] as? Bool) == true
             let agents = liveAgents(w)
             var standsFor: String?
@@ -327,9 +339,14 @@ enum Orca {
            let lo = try? JSONSerialization.jsonObject(with: list) as? [String: Any],
            let terms = (lo["result"] as? [String: Any])?["terminals"] as? [[String: Any]] {
             for t in terms {
-                if let tab = t["tabId"] as? String, let leaf = t["leafId"] as? String, let h = t["handle"] as? String {
+                guard let h = t["handle"] as? String else { continue }
+                if let tab = t["tabId"] as? String, let leaf = t["leafId"] as? String {
                     handles["\(tab):\(leaf)"] = h
                 }
+                // A terminal Orca restored after a restart is listed by its pty ("pty:…"), and keeps the agent's pane
+                // under recordedPaneKey. Without this its agent had no handle, and going to it opened the first
+                // terminal of the worktree instead, another tab (16-nov).
+                if let recorded = t["recordedPaneKey"] as? String, handles[recorded] == nil { handles[recorded] = h }
             }
         }
         return handles
