@@ -25,6 +25,8 @@ final class Store: ObservableObject {
     @Published var morningApproved = false
     @Published var morningWriting = false
     @Published var morningWritten: MorningWriteResult?
+    /// How the open Main Quest ends when the plan creates a new one: "Done" or "Canceled". He picks it; nil until then.
+    @Published var morningPrevious: String?
     @Published var morningNotice: String?
     @Published var gameOptions: [GameOption] = []
     @Published var gamesLoading = false
@@ -71,7 +73,7 @@ final class Store: ObservableObject {
 
     func resetMorning() {
         morningComments = ""; morningContinueAnyway = false; morningPlan = nil; morningPlanJSON = nil; morningRounds = []
-        morningApproved = false; morningWritten = nil; morningNotice = nil; gameOptions = []; offeredGames = []
+        morningApproved = false; morningWritten = nil; morningPrevious = nil; morningNotice = nil; gameOptions = []; offeredGames = []
         standupDone = false; standupNotes = ""; standupSkipped = false; morningDay = Morning.today
     }
 
@@ -93,9 +95,10 @@ final class Store: ObservableObject {
         do {
             // The app reads what the plan must place; the agent then cannot leave any of it out unnoticed.
             if let key = Database.shared.secret("linearApiKey") { morningWindow = await DayWindow.load(key: key) }
-            let run = try await Agents.run(.morningPlan(comments: morningComments, rounds: morningRounds,
+            let run = try await Agents.run(.morningPlan(comments: morningComments, rounds: morningRounds, open: openQuestFact,
                                                         window: morningWindow?.prompt ?? "Quicksave could not read Linear for you: read his issues yourself."))
-            morningPlan = try JSONDecoder().decode(MorningPlan.self, from: Data(run.resultJSON.utf8))
+            let proposed = try JSONDecoder().decode(MorningPlan.self, from: Data(run.resultJSON.utf8))
+            morningPlan = morningWindow?.forcingDue(proposed) ?? proposed
             morningPlanJSON = run.resultJSON
         } catch {
             if correction != nil { morningRounds.removeLast() }
@@ -103,9 +106,30 @@ final class Store: ObservableObject {
         }
     }
 
+    /// The open Main Quest, as the app reads it from Linear, for the planner. It must not guess this (16-nov it read
+    /// TEMI-577 as closed because it was not in its list, and the write refused the plan).
+    private var openQuestFact: String {
+        guard let q = quest else { return "None: no Main Quest is open in Linear." }
+        return "\(q.identifier) \"\(q.title)\", \(q.stateName), due \(q.dueDate ?? "with no date"), \(q.doneCount) of \(q.pieces.count) pieces done."
+    }
+
+    /// The plan replaces an open Main Quest: he must say how that one ends before approving.
+    var morningReplaces: MainQuest? {
+        guard let plan = morningPlan, plan.action == "create", let q = quest else { return nil }
+        return q
+    }
+
+    /// The write went through, or there was nothing to write: only then does the panel move on to the standup.
+    var morningWriteOK: Bool {
+        guard morningApproved, let plan = morningPlan else { return false }
+        if !plan.writes { return true }
+        return !morningWriting && morningWritten?.outcome == "done"
+    }
+
     /// He approved: the plan is written to Linear, and the games are looked for at the same time.
     func approvePlan() async {
         guard let plan = morningPlan, let json = morningPlanJSON, !morningApproved, !applying else { return }
+        if morningReplaces != nil && morningPrevious == nil { return }
         morningApproved = true
         morningNotice = nil
         async let games: Void = loadGames()
@@ -121,11 +145,25 @@ final class Store: ObservableObject {
         morningWriting = true
         defer { morningWriting = false }
         var result = morningWritten
+        // The open Main Quest ends first, as he chose, so the write finds none open and creates the new one.
+        if let old = morningReplaces, let end = morningPrevious, result?.previousClosed != true {
+            do {
+                try await Orca.linearWrite(["status", "set", old.identifier, "--to", end])
+                if result == nil { result = MorningWriteResult(outcome: "failed", summary: "", identifier: nil, url: nil) }
+                result?.previousClosed = true
+            } catch {
+                morningWritten = MorningWriteResult(outcome: "failed",
+                                                    summary: "\(old.identifier) could not be set to \(end): \(error.localizedDescription) Nothing else was written.",
+                                                    identifier: old.identifier, url: old.url?.absoluteString)
+                return
+            }
+        }
         if plan.action != "keep", result?.mainQuestDone != true {
             do {
                 let run = try await Agents.run(.morningWrite(plan: json))
                 var decoded = try JSONDecoder().decode(MorningWriteResult.self, from: Data(run.resultJSON.utf8))
                 decoded.mainQuestDone = decoded.outcome == "done"
+                decoded.previousClosed = result?.previousClosed
                 result = decoded
             } catch {
                 result = MorningWriteResult(outcome: "failed", summary: "It could not be written: \(error.localizedDescription)",

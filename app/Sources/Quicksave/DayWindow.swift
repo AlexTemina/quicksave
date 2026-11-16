@@ -93,6 +93,33 @@ struct DayWindow {
     }
 
     /// Codes of the window the plan did not place anywhere.
+    /// His issues due today or before. They are always side quests, whether they fit or not (16-nov).
+    var dueByToday: [Linear.WorkIssue] {
+        let today = Morning.today
+        return mine.filter { ($0.dueDate ?? "9999") <= today }
+    }
+
+    /// The plan with every issue due today or before as a side quest, whatever the agent decided. Pieces stay pieces.
+    func forcingDue(_ plan: MorningPlan) -> MorningPlan {
+        var p = plan
+        let pieces = Set(p.pieces.compactMap(\.id))
+        var sides = p.sideQuests ?? []
+        let have = Set(sides.map(\.id))
+        let today = Morning.today
+        let added = dueByToday.filter { !pieces.contains($0.identifier) && !have.contains($0.identifier) }
+        guard !added.isEmpty else { return p }
+        // Due ones go before the rest, in the 16-oct order.
+        let firstLater = sides.firstIndex { s in !dueByToday.contains { $0.identifier == s.id } } ?? sides.count
+        sides.insert(contentsOf: added.map { i in
+            MorningPlan.Side(id: i.identifier, title: i.title, url: i.url,
+                             why: (i.dueDate == today ? "due today" : "overdue since \(QSDate.friendly(i.dueDate ?? today))") + ", \(i.state.name)")
+        }, at: firstLater)
+        p.sideQuests = sides
+        let ids = Set(added.map(\.identifier))
+        p.discarded.removeAll { d in ids.contains { d.what.contains($0) } }
+        return p
+    }
+
     func missing(from plan: MorningPlan) -> [Linear.WorkIssue] {
         let text = ([plan.goal] + plan.pieces.compactMap(\.id) + (plan.sideQuests ?? []).map(\.id)
                     + plan.discarded.map { $0.what + " " + $0.why } + [plan.existing ?? ""]).joined(separator: " ")

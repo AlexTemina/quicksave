@@ -57,12 +57,12 @@ struct MorningPlan: Decodable {
     let pieces: [Piece]
     let dueDate: String
     let why: String
-    let discarded: [Discard]
+    var discarded: [Discard]
     let meetings: [String]
     let failedSources: [String]
     let notes: String?
     /// What fits today beyond the Main Quest.
-    let sideQuests: [Side]?
+    var sideQuests: [Side]?
     /// From the projects he leads: what to look at today.
     var watch: [Watch]? = nil
 
@@ -86,6 +86,7 @@ struct MorningWriteResult: Decodable {
     /// Kept by the app, so "Try again" only redoes what did not go through.
     var mainQuestDone: Bool? = nil
     var sideQuestsDone: Bool? = nil
+    var previousClosed: Bool? = nil
 }
 
 struct StandupResult: Decodable {
@@ -134,7 +135,7 @@ enum Morning {
 
 extension AgentJob {
     /// Proposes the day's Main Quest. It reads Linear, the weekly contract and his work calendar, and writes nothing.
-    static func morningPlan(comments: String, rounds: [(plan: String, correction: String)], window: String) -> AgentJob {
+    static func morningPlan(comments: String, rounds: [(plan: String, correction: String)], open: String, window: String) -> AgentJob {
         let history = rounds.isEmpty ? "None: this is the first proposal." : rounds.enumerated().map { i, r in
             "Proposal \(i + 1):\n\(r.plan)\nHis correction: \(r.correction)"
         }.joined(separator: "\n\n")
@@ -158,6 +159,10 @@ extension AgentJob {
             \(comments.isEmpty ? "None." : comments)
             >>>
 
+            The open Main Quest, read from Linear by Quicksave just now. This is a fact: never assume it is closed because it is missing from a list.
+            \(open)
+            When one is open: keep or move continues it; create replaces it, and then existing must be its identifier. Alejandro chooses in the app whether it ends as Done or Canceled; you only say in notes which fits (Done when its pieces are done).
+
             \(window)
             \(Ritual.due(posted: Ritual.postedSaved()).contains(.sfa) && !Ritual.isTuesday ? "\nThe weekly SFA was due on Tuesday and is not posted yet. Count about half an hour for it as busy time today and say so in notes. Quicksave drafts it from Today; it is not a side quest.\n" : "")\(Ritual.isTuesday ? "\nToday is Tuesday, the last day of Alan's week. Two things are due today whatever else happens: the Linear weekly status updates of his projects and the crew initiative, before 14:00, and the weekly SFA in the afternoon. Count about an hour for each as busy time, like meetings, when you size the side quests, and say so in notes. Quicksave drafts them from Today; they are not side quests.\n" : "")
             Earlier proposals today and his corrections, oldest first. When there are any, start from the last proposal and apply every correction:
@@ -166,15 +171,15 @@ extension AgentJob {
             \(Morning.howToRun)
 
             The fields:
-            - action: keep when a Main Quest is open and in date (return it as it is, with the pieces left), move when one is open but past its due date (propose the new due date), create when none is open.
-            - existing: the identifier of the open Main Quest, for keep and move.
+            - action: keep when a Main Quest is open and in date (return it as it is, with the pieces left), move when one is open but past its due date (propose the new due date), create when none is open or when the open one should give way to a new goal.
+            - existing: the identifier of the open Main Quest, for keep, move, and create when it replaces one.
             - goal: one sentence. done: what "done" means, one sentence.
             - pieces: in order. id is the issue's identifier and url its link; for an issue that does not exist yet, leave id empty and set team. step is what this piece takes today, one short sentence.
             - dueDate: yyyy-MM-dd.
             - why: why this goal, one line. discarded: what you left out and why, one line each.
             - meetings: today's meetings, one line each, like "10:00 Spain weekly".
             - failedSources: every source you could not read, said plainly. Empty if all worked.
-            - sideQuests: his other open issues that fit today next to the Main Quest, and only what fits. Work out the free time: his working day minus meetings minus what the Main Quest takes, and size each issue by its estimate or what it says. Rank by the 16-oct rule: something breaking now, then due today or overdue, then any date before no date and sooner first, then Linear priority, then size with small first. Never the Main Quest or its pieces, nothing labelled collectible, nothing in Pending for inputs. Each with id, title (a 2-3 word tag, without the code), url, and why in a few words (for example "due today, XS"). One of them is the medium slot (see the list above), with slot true.
+            - sideQuests: his other open issues that fit today next to the Main Quest, and only what fits. Work out the free time: his working day minus meetings minus what the Main Quest takes, and size each issue by its estimate or what it says. Every issue of his due today or overdue is a side quest, always, whether it fits or not, Pending for inputs included (16-nov): only the Main Quest's pieces are not. Size the rest around them. Rank by the 16-oct rule: something breaking now, then due today or overdue, then any date before no date and sooner first, then Linear priority, then size with small first. Never the Main Quest or its pieces, nothing labelled collectible, and beyond what is due, nothing in Pending for inputs. Each with id, title (a 2-3 word tag, without the code), url, and why in a few words (for example "due today, XS"). One of them is the medium slot (see the list above), with slot true.
             - discarded: every issue of the window that is not a piece or a side quest, by its code with its tag, and the reason in a few words ("waiting on Elise", "due 14-nov, no time today"). Nothing of the window may be missing.
             - watch: from his projects' list above, only what he should look at today. Each with id, title (2-3 word tag), url, and why ("overdue 3 days, Rémi's", "blocked on review"). Empty if all is on track.
             """,
@@ -210,7 +215,7 @@ extension AgentJob {
             \(plan)
 
             Rules:
-            - Read the open Main Quest again first. If the plan says create and one is open, or it says move and the open one is a different issue, write nothing and return needs_you saying what you found.
+            - Read the open Main Quest again first. The app has already closed the one the plan replaces, if any. If the plan says create and one is still open, or it says move and the open one is a different issue, write nothing and return needs_you saying what you found.
             - Do not write the side quests: the app writes them into the description itself once you are done.
             - Pieces with an empty id are issues to create first, in their team, assigned to him, in Todo, with today's due date.
             - Never post a comment, and never change a piece's state, priority or labels.
@@ -348,7 +353,8 @@ struct MorningView: View {
     /// After approving, the panel moves to the standup; this goes back to look at the plan.
     @State private var viewingPlan = false
 
-    private var onStandup: Bool { store.morningApproved && !viewingPlan }
+    /// The standup comes only once the plan is in Linear: a failed or refused write keeps him on the plan (16-nov).
+    private var onStandup: Bool { store.morningWriteOK && !viewingPlan }
 
     private var gateCount: Int { store.pendingCards.count }
     /// While Apply runs, Linear is changing under the plan: the morning waits, with no way around it.
@@ -384,7 +390,7 @@ struct MorningView: View {
                     .id(onStandup)
                 }
                 .scrollBounceBehavior(.basedOnSize)
-                .onChange(of: store.morningApproved) { if store.morningApproved { viewingPlan = false } }
+                .onChange(of: store.morningWriteOK) { if store.morningWriteOK { viewingPlan = false } }
                 .onChange(of: store.standupDone) { if store.standupDone { withAnimation { proxy.scrollTo("done", anchor: .top) } } }
             }
         }
@@ -399,9 +405,9 @@ struct MorningView: View {
             Text(Morning.todayLong).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
             Spacer()
             HStack(spacing: Theme.Space.xs) {
-                stepChip("1 Plan", current: !onStandup, enabled: store.morningApproved) { viewingPlan = true }
+                stepChip("1 Plan", current: !onStandup, enabled: store.morningWriteOK) { viewingPlan = true }
                 Image(systemName: "chevron.right").font(Theme.Text.micro).foregroundStyle(Theme.Palette.textTertiary)
-                stepChip("2 Standup", current: onStandup, enabled: store.morningApproved) { viewingPlan = false }
+                stepChip("2 Standup", current: onStandup, enabled: store.morningWriteOK) { viewingPlan = false }
             }
             if store.morningPlan != nil || store.morningApproved {
                 Button("Start over") { store.resetMorning(); chosen = nil; correction = "" }
@@ -627,15 +633,39 @@ struct MorningView: View {
                         .buttonStyle(QSHoverStyle()).foregroundStyle(Theme.Palette.accent)
                         .disabled(applying || store.morningProposing || correction.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
+                if let old = store.morningReplaces { replacesRow(old) }
                 HStack {
                     Text(plan.writes ? "Nothing is written in Linear until you approve."
                                      : "Nothing is written: the open Main Quest stays as it is.")
                         .font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
                     Spacer()
-                    QSPrimaryButton(title: plan.approveTitle, icon: "checkmark", enabled: !applying && !store.morningProposing) {
+                    QSPrimaryButton(title: plan.approveTitle, icon: "checkmark",
+                                    enabled: !applying && !store.morningProposing && (store.morningReplaces == nil || store.morningPrevious != nil)) {
                         Task { await store.approvePlan() }
                     }
                 }
+            }
+        }
+    }
+
+    /// A Main Quest is still open and the plan creates a new one: he says how the old one ends, or keeps it.
+    private func replacesRow(_ old: MainQuest) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            QSNote(text: "\(old.identifier) (\(old.title.replacingOccurrences(of: "Main Quest: ", with: ""))) is still open, "
+                   + "\(old.doneCount) of \(old.pieces.count) pieces done. Choose how it ends before approving, or continue it instead.",
+                   icon: "exclamationmark.triangle", warning: true)
+            HStack(spacing: Theme.Space.m) {
+                Picker("", selection: $store.morningPrevious) {
+                    Text("Close it as Done").tag(Optional("Done"))
+                    Text("Cancel it").tag(Optional("Canceled"))
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                Button("Continue it instead") {
+                    Task { await store.proposePlan(correction: "Continue \(old.identifier) instead of creating a new Main Quest: move its due date if it slipped.") }
+                }
+                .buttonStyle(QSHoverStyle()).foregroundStyle(Theme.Palette.accent)
+                .disabled(applying || store.morningProposing)
+                Spacer()
             }
         }
     }
