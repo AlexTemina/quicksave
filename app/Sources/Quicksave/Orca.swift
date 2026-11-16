@@ -311,6 +311,9 @@ enum Orca {
         var out: [OpenWorktree] = []
         for w in all {
             let name = w["displayName"] as? String ?? ""
+            // A worktree whose folder is gone (a Claude scratchpad wiped after its PR merged, 16-nov) is still in git
+            // until pruned, so Orca still lists it, but it is nowhere to open: it does not count.
+            if let path = w["path"] as? String, !path.isEmpty, !FileManager.default.fileExists(atPath: path) { continue }
             guard (w["isArchived"] as? Bool) != true, !name.hasPrefix("🚫"), !isReview(w),
                   let id = w["worktreeId"] as? String else { continue }
             let main = (w["isMainWorktree"] as? Bool) == true

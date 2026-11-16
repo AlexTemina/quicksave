@@ -635,6 +635,10 @@ final class Store: ObservableObject {
 
     // Reviews: pull requests waiting for his review, and the review prepared for each. See docs/reviews.md.
     @Published var reviewRequests: [ReviewRequest] = []
+    /// State and CI of the pull requests he reviewed that are no longer requested.
+    @Published var reviewedStatus: [Int: GitHub.Status] = [:]
+    /// Pull requests he has already reviewed on GitHub, from Quicksave or not: their tag says Published (16-nov).
+    @Published var reviewedOnGitHub: Set<Int> = []
     @Published var reviews: [Int: PRReview] = Store.savedReviews()
     @Published var reviewSteps: [Int: String] = [:]
     @Published var reviewBusy: Set<Int> = []
@@ -692,10 +696,14 @@ final class Store: ObservableObject {
             return
         }
         loading = true
-        repeat {
+        // One more pass at most for the calls that came while it loaded. Looping until none came never ended once a
+        // pass took longer than the 60-second timer, and everything awaiting a refresh waited forever (16-nov).
+        refreshAgain = false
+        await load()
+        if refreshAgain {
             refreshAgain = false
             await load()
-        } while refreshAgain
+        }
         loading = false
     }
 

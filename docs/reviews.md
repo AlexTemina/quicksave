@@ -8,6 +8,7 @@ It moves the vault's `pr-review-copilot` and `code-flow` skills into the app. Th
 
 - Pull requests of alan-apps where his review is requested by name. Requests sent to his team do not count.
 - Each row: title, author, size, age, and the linked Linear issue when there is one.
+- Each row and the detail show the pull request's number as the board's cards do (16-nov): green open, grey draft, red when its CI fails, purple merged, brown closed. It links to GitHub. It comes in the same GitHub read as the list, so it costs nothing more.
 - Each row also shows how many people are asked to review. Pull requests with many reviewers (the usual six) go in their own group, below the ones that are really his.
 - The count of pending reviews sits in the menu bar, next to the inbox count.
 - A pull request leaves the list when his review is no longer requested: he published it, it was merged or closed, or he was removed as a reviewer.
@@ -33,7 +34,7 @@ While it works, the row shows its state: running, ready or failed. The model is 
   - The proposed verdict, which he can change.
   - The main comment, the text that goes with the approval or the request for changes. It is editable.
   - The list of comments: file and line, the emoji picker (🔧 ❓ ⚠️ 🤔 🍖 👍 and the rest of the legend), editable text, and a way to drop each one.
-- **His notes:** a big text box to dictate into with Whisperflow while he reads the code. "Apply my notes" passes the notes to an agent (Sonnet 5.5). The agent adds comments and changes the text or emoji of existing ones, including the main comment. He sees each change in the list.
+- **Talk it through (16-nov):** a conversation with the agent that prepared the review (Opus 5.5, continuing its session), in the app's standard conversation. He writes or dictates with Whisperflow. It answers in the language he wrote in: explains the code, answers questions, gives its view, pushes back. It reads the worktree to answer. When what he says asks for a change (a comment, a text or emoji, the main comment, the verdict), it makes it in the same turn and the conversation says what changed; the list marks it as before. Comments stay in English. Nothing is posted. The conversation is kept with the review. It replaced "His notes" and "Apply my notes", which only changed comments and never answered.
 
 ## Publishing
 
@@ -46,7 +47,7 @@ While it works, the row shows its state: running, ready or failed. The model is 
 
 - Every refresh, Quicksave reads each published review on GitHub: answers in the threads of his comments, comments on the pull request's conversation by other people (bots left out), and new commits on the branch.
 - A pull request with something he has not seen goes to the top of the list, in "New activity", tagged with its new replies and new commits. Opening it marks them seen; what was new stays highlighted while he is there.
-- Each published comment shows its thread and a box to reply. His notes can also draft replies. Replies go out with the same Publish button, never alone, and are marked until they are posted.
+- Each published comment shows its thread and a box to reply. The conversation can also draft replies. Replies go out with the same Publish button, never alone, and are marked until they are posted.
 - New commits show a "Check the new commits" button. It brings the worktree to the branch as it is on GitHub and runs an agent (Opus 5.5, continuing the review's session) that marks each published comment as addressed or not, with one line on how, drafts replies, proposes new comments only for what is new, and suggests a verdict. Nothing is posted.
 
 ## Worktrees

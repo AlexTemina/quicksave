@@ -20,14 +20,18 @@ enum GitHub {
             let statusCheckRollup: [Check]?
         }
         guard let p = try? JSONDecoder().decode(PR.self, from: data) else { return nil }
-        let results = (p.statusCheckRollup ?? []).map { ($0.conclusion ?? $0.state ?? $0.status ?? "").uppercased() }
-        let ci: CI
-        if results.isEmpty { ci = .none }
-        else if results.contains(where: { ["FAILURE", "ERROR", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"].contains($0) }) { ci = .failing }
-        else if results.contains(where: { ["", "IN_PROGRESS", "QUEUED", "PENDING", "WAITING", "EXPECTED"].contains($0) }) { ci = .running }
-        else { ci = .passing }
+        let ci = Self.ci((p.statusCheckRollup ?? []).map { $0.conclusion ?? $0.state ?? $0.status ?? "" })
         let state = p.isDraft && p.state == "OPEN" ? "draft" : p.state.lowercased()
         return Status(state: state, ci: ci)
+    }
+
+    /// The CI of a pull request from its checks' conclusions or states: failing wins, then running, then passing.
+    static func ci(_ checks: [String]) -> CI {
+        let results = checks.map { $0.uppercased() }
+        if results.isEmpty { return .none }
+        if results.contains(where: { ["FAILURE", "ERROR", "TIMED_OUT", "ACTION_REQUIRED", "STARTUP_FAILURE"].contains($0) }) { return .failing }
+        if results.contains(where: { ["", "IN_PROGRESS", "QUEUED", "PENDING", "WAITING", "EXPECTED"].contains($0) }) { return .running }
+        return .passing
     }
 
     struct PRPreview: Decodable {

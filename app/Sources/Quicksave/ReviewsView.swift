@@ -70,7 +70,7 @@ struct ReviewsView: View {
             case .request(let pr):
                 Text(pr.title).font(Theme.Text.cardTitle).lineLimit(2).multilineTextAlignment(.leading)
                 HStack(spacing: Theme.Space.s) {
-                    Text("#\(pr.number)").font(Theme.Text.code).foregroundStyle(Theme.Palette.textSecondary)
+                    PRBadge(pr: pr.badge, live: pr.status)
                     Text(pr.author).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
                     Spacer(minLength: 0)
                     sizeText(pr.additions, pr.deletions)
@@ -79,14 +79,15 @@ struct ReviewsView: View {
                     if let c = pr.created { Text(QSDate.ago(c)).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textTertiary) }
                     Text(pr.reviewers == 1 ? "only you" : "\(pr.reviewers) reviewers")
                         .font(Theme.Text.meta).foregroundStyle(pr.shared ? Theme.Palette.textTertiary : Theme.Palette.textSecondary)
-                    if pr.isDraft { QSPill(text: "Draft", color: Theme.Palette.prDraft) }
                     Spacer(minLength: 0)
                     stateTag(n, review)
                 }
             case .reviewed(let r):
                 Text(r.title).font(Theme.Text.cardTitle).lineLimit(2).multilineTextAlignment(.leading)
                 HStack(spacing: Theme.Space.s) {
-                    Text("#\(r.number)").font(Theme.Text.code).foregroundStyle(Theme.Palette.textSecondary)
+                    if let url = URL(string: r.url) {
+                        PRBadge(pr: PullRequest(number: r.number, url: url, status: nil, title: r.title), live: store.reviewedStatus[r.number])
+                    }
                     Text(r.author).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
                     Spacer(minLength: 0)
                     stateTag(n, r)
@@ -118,7 +119,9 @@ struct ReviewsView: View {
             case .failed: QSTag(text: "Failed", icon: "exclamationmark.triangle", color: Theme.Palette.prFailing)
             case .preparing: QSTag(text: "Preparing", icon: Theme.Icon.agentLive, color: Theme.Palette.agentWorking)
             case .ready:
-                if r.everPublished && !r.hasPending {
+                // Published when GitHub has his review, even one he sent outside Quicksave; after an in-app publish,
+                // Ready again only while something new waits to go.
+                if (r.everPublished && !r.hasPending) || (!r.everPublished && store.reviewedOnGitHub.contains(n)) {
                     QSTag(text: "Published", icon: Theme.Icon.published, color: Theme.Palette.published)
                 } else {
                     QSTag(text: "Ready", icon: "checkmark", color: Theme.Palette.accent)
@@ -196,7 +199,7 @@ private struct ReviewDetail: View {
                 QSOpenLinkButton(url: pr.url, help: "Open on GitHub")
             }
             HStack(spacing: Theme.Space.m) {
-                Text("#\(pr.number)").font(Theme.Text.code)
+                PRBadge(pr: pr.badge, live: store.reviewRequests.first { $0.number == pr.number }?.status ?? store.reviewedStatus[pr.number])
                 Text("by \(pr.author)").font(Theme.Text.meta)
                 if pr.changedFiles > 0 {
                     Text("+\(pr.additions) −\(pr.deletions) · \(pr.changedFiles) files").font(Theme.Text.code)
@@ -266,7 +269,7 @@ private struct ReviewDetail: View {
             mainComment(r)
             comments(r)
         }
-        section("Your notes") { notes(r) }
+        section("Talk it through") { talk(r) }
         publishBar(r)
     }
 
@@ -452,31 +455,38 @@ private struct ReviewDetail: View {
 
     // MARK: Notes
 
-    private func notes(_ r: PRReview) -> some View {
-        VStack(alignment: .leading, spacing: Theme.Space.m) {
-            Label("Talk through the code here. Apply my notes turns them into comments, changes texts and emojis, the main comment or the verdict. Nothing is posted.",
-                  systemImage: Theme.Icon.agentLive)
-                .font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
-            TextEditor(text: Binding(get: { r.notes }, set: { v in store.editReview(pr.number) { $0.notes = v } }))
-                .font(Theme.Text.body)
-                .scrollContentBackground(.hidden)
-                .padding(Theme.Space.s)
-                .frame(minHeight: Theme.Size.notesMinHeight)
-                .background(RoundedRectangle(cornerRadius: Theme.Radius.s).fill(Theme.Palette.well))
-                .disabled(busy)
-            HStack(spacing: Theme.Space.m) {
-                if busy, store.reviewSteps[pr.number] != "Publishing" {
-                    ProgressView().controlSize(.small)
-                    Text((store.reviewSteps[pr.number] ?? "Working") + "…").font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
-                } else if let change = r.lastChange {
-                    Label(change, systemImage: "checkmark").font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
+    private func talk(_ r: PRReview) -> some View {
+        VStack(alignment: .leading, spacing: Theme.Space.s) {
+            // Notes written in the old box, never applied: one button sends them as his first message.
+            if !r.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                    QSNote(text: "Notes you had not sent: " + r.notes, icon: "text.bubble")
+                    Button("Send them") {
+                        let n = r.notes
+                        store.editReview(pr.number) { $0.notes = "" }
+                        Task { await store.talkReview(pr.number, message: n) }
+                    }
+                    .buttonStyle(QSHoverStyle()).foregroundStyle(Theme.Palette.accent).disabled(busy)
                 }
-                Spacer()
-                Button { Task { await store.applyNotes(pr.number) } } label: { Label("Apply my notes", systemImage: Theme.Icon.agentLive) }
-                    .buttonStyle(QSHoverStyle()).foregroundStyle(Theme.Palette.accent)
-                    .disabled(busy || r.notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
+            conversation(r)
         }
+    }
+
+    private func conversation(_ r: PRReview) -> some View {
+        QSConversation(
+            purpose: "Talk through the code with the agent that prepared this review. It answers, and changes comments, the main comment or the verdict when you ask. Nothing is posted.",
+            turns: (r.chat ?? []).flatMap { t -> [QSConversationTurn] in
+                if t.mine { return [QSConversationTurn(id: t.id * 2, who: .me, text: t.text)] }
+                var out = [QSConversationTurn(id: t.id * 2, who: .ai, text: t.text)]
+                if let c = t.changed { out.append(QSConversationTurn(id: t.id * 2 + 1, who: .event, text: "Changed: " + c)) }
+                return out
+            },
+            busy: busy && store.reviewSteps[pr.number] != "Publishing",
+            step: store.reviewSteps[pr.number],
+            placeholder: "Ask about the code, or say what to change",
+            send: { msg in Task { await store.talkReview(pr.number, message: msg) } }
+        ) { _ in EmptyView() }
     }
 
     // MARK: Publish

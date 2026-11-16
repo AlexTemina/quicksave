@@ -124,7 +124,7 @@ struct QSConversation<Proposal: View>: View {
         case .question:
             HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                 Image(systemName: "questionmark.bubble.fill").foregroundStyle(Theme.Palette.agentAsking)
-                Text(t.text).font(Theme.Text.body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                MarkdownBlock(t.text).font(Theme.Text.body).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             }
             .padding(Theme.Space.m)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -133,7 +133,8 @@ struct QSConversation<Proposal: View>: View {
             VStack(alignment: .leading, spacing: Theme.Space.s) {
                 HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
                     Image(systemName: "sparkles").foregroundStyle(Theme.Palette.accent)
-                    Text(t.text).font(Theme.Text.body).foregroundStyle(Theme.Palette.textSecondary)
+                    // Its answers come in Markdown (bullets, code, bold): shown formatted, like any description.
+                    MarkdownBlock(t.text).font(Theme.Text.body).foregroundStyle(Theme.Palette.textPrimary)
                         .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
                     if let label = t.label { Text(label).font(Theme.Text.code).foregroundStyle(Theme.Palette.textTertiary) }

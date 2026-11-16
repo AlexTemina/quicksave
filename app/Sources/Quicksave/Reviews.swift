@@ -18,7 +18,11 @@ struct ReviewRequest: Identifiable, Hashable {
     let headRef: String
     let baseRef: String
     let isDraft: Bool
+    var ci: GitHub.CI = .none
     var id: Int { number }
+    /// As the board's cards show it: its number in the color of its state, red when its CI fails.
+    var badge: PullRequest { PullRequest(number: number, url: url, status: isDraft ? "draft" : "open", title: title) }
+    var status: GitHub.Status { GitHub.Status(state: isDraft ? "draft" : "open", ci: ci) }
     /// Many reviewers (the usual six): his review matters less, so it goes in its own group.
     var shared: Bool { reviewers > Reviews.manyReviewers }
 }
@@ -71,6 +75,15 @@ struct ThreadPost: Codable, Hashable, Identifiable {
 }
 
 /// The review of one pull request, as it lives in Quicksave until he publishes it.
+/// One turn of his conversation with the review's agent: what he said, or what it answered and what it changed.
+struct ReviewChatTurn: Codable, Hashable {
+    var id: Int64
+    var mine: Bool
+    var text: String
+    /// What the answer changed in the review, in one sentence; nil when it changed nothing.
+    var changed: String? = nil
+}
+
 struct PRReview: Codable {
     enum State: String, Codable { case preparing, ready, failed }
     var number: Int
@@ -89,9 +102,11 @@ struct PRReview: Codable {
     var verdictPublished: ReviewVerdict? = nil
     var comments: [ReviewComment] = []
     var flowPage: String? = nil
+    /// Before the conversation (16-nov): a box of notes. Kept so older saved reviews still read.
     var notes = ""
-    /// What his last notes changed, in one sentence.
     var lastChange: String? = nil
+    /// His conversation with the review's agent, oldest first. See docs/reviews.md.
+    var chat: [ReviewChatTurn]? = nil
     var session: String? = nil
     var cost: Double? = nil
     var started = Date()
@@ -172,7 +187,7 @@ enum Reviews {
 
     static func requested() async throws -> [ReviewRequest] {
         guard let gh = GitHub.binary else { throw QuicksaveError.message("The gh command is not installed.") }
-        let fields = "number,title,url,author,createdAt,additions,deletions,changedFiles,reviewRequests,headRefName,baseRefName,isDraft"
+        let fields = "number,title,url,author,createdAt,additions,deletions,changedFiles,reviewRequests,headRefName,baseRefName,isDraft,statusCheckRollup"
         let r = try await Shell.run(gh, ["pr", "list", "--repo", repo, "--state", "open", "--search", "user-review-requested:@me",
                                          "--json", fields, "--limit", "100"])
         guard r.status == 0 else {
@@ -181,15 +196,30 @@ enum Reviews {
         struct Raw: Decodable {
             struct Author: Decodable { let login: String }
             let number: Int, title: String, url: String, createdAt: String, additions: Int, deletions: Int, changedFiles: Int
+            struct Check: Decodable { let conclusion: String?; let status: String?; let state: String? }
             let author: Author?, reviewRequests: [[String: String?]]?, headRefName: String, baseRefName: String, isDraft: Bool
+            let statusCheckRollup: [Check]?
         }
         let raws = try JSONDecoder().decode([Raw].self, from: r.out)
         return raws.compactMap { p in
             guard let url = URL(string: p.url) else { return nil }
             return ReviewRequest(number: p.number, title: p.title, url: url, author: p.author?.login ?? "", created: QSDate.parse(p.createdAt),
                                  additions: p.additions, deletions: p.deletions, changedFiles: p.changedFiles,
-                                 reviewers: p.reviewRequests?.count ?? 1, headRef: p.headRefName, baseRef: p.baseRefName, isDraft: p.isDraft)
+                                 reviewers: p.reviewRequests?.count ?? 1, headRef: p.headRefName, baseRef: p.baseRefName, isDraft: p.isDraft,
+                                 ci: GitHub.ci((p.statusCheckRollup ?? []).map { $0.conclusion ?? $0.state ?? $0.status ?? "" }))
         }.sorted { ($0.created ?? .distantPast) < ($1.created ?? .distantPast) }
+    }
+
+    /// Whether he has a submitted review on the pull request on GitHub (approved, commented or changes requested), from
+    /// Quicksave or not. Nil when GitHub could not be read.
+    static func reviewedByHim(_ number: Int) async -> Bool? {
+        guard let me = await login(),
+              let data = try? await gh(["api", "repos/\(repo)/pulls/\(number)/reviews", "--paginate"]),
+              let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
+        return list.contains { r in
+            ((r["user"] as? [String: Any])?["login"] as? String)?.lowercased() == me.lowercased()
+                && ["APPROVED", "COMMENTED", "CHANGES_REQUESTED"].contains(r["state"] as? String ?? "")
+        }
     }
 
     /// OPEN, MERGED or CLOSED, or nil when GitHub could not be read.
@@ -316,18 +346,36 @@ enum Reviews {
     /// tracking its remote, so the editor shows the pull request. Reused when it already exists.
     static func worktree(for pr: ReviewRequest) async throws -> String {
         let name = "Review PR \(pr.number)"
-        if let w = await Orca.worktree(named: name), FileManager.default.fileExists(atPath: w.path) { return w.path }
-        let parent = try await parentWorktree()
-        let created = try await Orca.run(["worktree", "create", "--repo", "name:alan-apps", "--name", name,
-                                          "--parent-worktree", "path:\(parent)", "--pr", "\(pr.number)",
-                                          "--comment", "Review of #\(pr.number) \(pr.title), by Quicksave", "--setup", "skip", "--json"])
-        guard let path = findPath(in: created) else { throw QuicksaveError.message("Orca did not say where the review worktree is.") }
+        let path: String
+        if let w = await Orca.worktree(named: name), FileManager.default.fileExists(atPath: w.path) {
+            path = w.path
+        } else {
+            let parent = try await parentWorktree()
+            let created = try await Orca.run(["worktree", "create", "--repo", "name:alan-apps", "--name", name,
+                                              "--parent-worktree", "path:\(parent)", "--pr", "\(pr.number)",
+                                              "--comment", "Review of #\(pr.number) \(pr.title), by Quicksave", "--setup", "skip", "--json"])
+            guard let p = findPath(in: created) else { throw QuicksaveError.message("Orca did not say where the review worktree is.") }
+            path = p
+        }
+        // A reused worktree is checked too: one left on Orca's own branch (a first try that failed half way) opened in
+        // VS Code with no pull request (#136835, 16-nov).
         let b = pr.headRef
-        try await gitStep(path, ["config", "--add", "remote.origin.fetch", "+refs/heads/\(b):refs/remotes/origin/\(b)"])
+        if await currentBranch(path) == b { return path }
+        let refspec = "+refs/heads/\(b):refs/remotes/origin/\(b)"
+        let fetches = (try? await Shell.run(git, ["-C", path, "config", "--get-all", "remote.origin.fetch"]))
+            .map { String(data: $0.out, encoding: .utf8) ?? "" } ?? ""
+        if !fetches.components(separatedBy: "\n").contains(refspec) {
+            try await gitStep(path, ["config", "--add", "remote.origin.fetch", refspec])
+        }
         try await gitStep(path, ["fetch", "origin", b, pr.baseRef])
         try await gitStep(path, ["checkout", "-B", b, "--track", "origin/\(b)"])
         try await gitStep(path, ["config", "branch.\(b).github-pr-owner-number", "alan-eu#alan-apps#\(pr.number)"])
         return path
+    }
+
+    private static func currentBranch(_ path: String) async -> String? {
+        guard let r = try? await Shell.run(git, ["-C", path, "branch", "--show-current"]), r.status == 0 else { return nil }
+        return String(data: r.out, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// The parent every review worktree hangs from, created the first time. Its emoji says it is never deleted.
@@ -451,7 +499,7 @@ extension AgentJob {
 
     /// Folds what he dictated into the review: new comments, changed texts and emojis, the main comment, the verdict.
     /// It continues the session that prepared the review, so it remembers the code and the context.
-    static func reviewNotes(_ review: PRReview, notes: String) -> AgentJob {
+    static func reviewTalk(_ review: PRReview, message notes: String) -> AgentJob {
         struct Item: Encodable { let id: String; let path: String; let line: Int; let emoji: String; let text: String; let dropped: Bool }
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
@@ -465,9 +513,13 @@ extension AgentJob {
             name: "review notes #\(review.number)",
             directory: review.worktree ?? NSTemporaryDirectory(),
             prompt: """
-            Alejandro is reviewing pull request #\(review.number) "\(review.title)" in Quicksave, with the review you prepared in this session. He read the code and dictated his thoughts (by voice, so expect loose wording). Fold them into the review.
+            Alejandro is reviewing pull request #\(review.number) "\(review.title)" in Quicksave, with the review you prepared in this session, and he is talking with you about it. He often dictates by voice, so expect loose wording.
 
-            His notes:
+            Talk with him: answer his questions about the code, explain what it does and why, give your view when he asks, and push back when you think he is wrong. Read the code in this worktree to answer; do not guess. Put what you say to him in `answer`, in the language he wrote in, short and plain, in Markdown: bullets over paragraphs, **bold** for the key point, `code` for names, files and lines (`path:line`), and a fenced block only for a few lines of code worth showing.
+
+            Change the review only when what he says asks for it or plainly implies it (a comment to add, a text or emoji to change, the main comment, the verdict). Then say in `answer` what you changed. When he only asks or thinks out loud, return the review as it is.
+
+            His message:
             <<<
             \(notes)
             >>>
@@ -487,17 +539,18 @@ extension AgentJob {
             - A new comment must sit on a line ADDED by the diff: check with `git diff origin/\(review.baseRef)...HEAD -- <file>`. If what he says is about the whole pull request, it goes in the main comment.
             - Never add a link to the emoji legend: Quicksave adds it when he publishes.
             - If his notes answer someone in the thread of a published comment, return it in `replies`: the id of that published comment and the full text of his answer (it replaces any draft he had there).
-            - Turn his words into clean review comments in his voice: English, short, direct, no em-dashes. Keep his meaning, do not add opinions he did not give. The emoji follows the weight he gives it.
+            - Comments and the main comment are always in English, whatever language he talks in: clean review comments in his voice, short, direct, no em-dashes. Keep his meaning, do not add opinions he did not give. The emoji follows the weight he gives it.
             - Change the verdict only if his notes say so or plainly imply it.
-            - summary: one sentence on what you changed.
+            - summary: one sentence on what you changed in the review, or "Nothing changed."
+            - answer: what you say to him.
 
             \(Morning.howToRun)
             """,
-            model: "claude-sonnet-5-5",
+            model: "claude-opus-5-5",
             allowed: reviewReads,
             denied: reviewNever + ["Edit", "Write"],
             schema: """
-            {"type":"object","properties":{"verdict":{"type":"string","enum":["APPROVE","COMMENT","REQUEST_CHANGES"]},"body":{"type":"string"},"comments":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"path":{"type":"string"},"line":{"type":"integer"},"emoji":{"type":"string"},"text":{"type":"string"},"dropped":{"type":"boolean"}},"required":["path","line","emoji","text"]}},"replies":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"]}},"summary":{"type":"string"}},"required":["verdict","body","comments","summary"]}
+            {"type":"object","properties":{"verdict":{"type":"string","enum":["APPROVE","COMMENT","REQUEST_CHANGES"]},"body":{"type":"string"},"comments":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"path":{"type":"string"},"line":{"type":"integer"},"emoji":{"type":"string"},"text":{"type":"string"},"dropped":{"type":"boolean"}},"required":["path","line","emoji","text"]}},"replies":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"text":{"type":"string"}},"required":["id","text"]}},"summary":{"type":"string"},"answer":{"type":"string"}},"required":["verdict","body","comments","summary","answer"]}
             """,
             maxTurns: 40,
             resume: review.session)
@@ -573,6 +626,8 @@ struct ReviewNotesResult: Decodable {
     let comments: [Comment]
     let replies: [Reply]?
     let summary: String
+    /// What it says back to him: the answer to his question, its view, or what it did.
+    let answer: String?
 }
 
 struct ReviewRecheckResult: Decodable {
@@ -596,6 +651,12 @@ extension Store {
             guard let n = Int(k) else { continue }
             // Reviews prepared before 12-nov carry the legend in the text; it is added on publish now.
             if v.bodyPublished == nil { v.body = Reviews.withoutLegend(v.body) }
+            // A review with its main comment or any comment on GitHub was published, whatever lost its verdict mark
+            // (134735 on 12-nov: a test reset it after he had published). Without the mark it read "Ready" and would
+            // have sent the review again.
+            if v.verdictPublished == nil && (v.bodyPublished != nil || v.comments.contains { $0.published != nil }) {
+                v.verdictPublished = v.verdict
+            }
             out[n] = v
         }
         return out
@@ -642,11 +703,19 @@ extension Store {
         // Merged or closed: the review is over, its worktree goes.
         let requested = Set(reviewRequests.map(\.number))
         for (n, r) in reviews where !requested.contains(n) && !reviewBusy.contains(n) {
-            guard let state = await Reviews.state(of: n), state != "OPEN" else { continue }
+            guard let url = URL(string: r.url),
+                  let live = await GitHub.status(of: PullRequest(number: n, url: url, status: nil)) else { continue }
+            reviewedStatus[n] = live
+            guard live.state != "open" && live.state != "draft" else { continue }
             if let w = r.worktree { await Reviews.removeWorktree(w) }
             reviews[n] = nil
             saveReviews()
             if reviewOpen == n { reviewOpen = nil }
+        }
+        // Reviewed on GitHub, wherever he did it: the tag follows GitHub, not only what Quicksave published.
+        for n in reviews.keys {
+            guard let done = await Reviews.reviewedByHim(n) else { continue }
+            if done { reviewedOnGitHub.insert(n) } else { reviewedOnGitHub.remove(n) }
         }
         // Published reviews: answers, conversation and new commits.
         for (n, r) in reviews where r.everPublished && !reviewBusy.contains(n) { await followReview(n) }
@@ -688,21 +757,25 @@ extension Store {
         }
     }
 
-    func applyNotes(_ number: Int) async {
-        guard let review = reviews[number], !reviewBusy.contains(number) else { return }
-        let notes = review.notes.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !notes.isEmpty else { return }
+    /// He says something to the review's agent: it answers, and changes the review when what he says asks for it.
+    func talkReview(_ number: Int, message: String) async {
+        let notes = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard reviews[number] != nil, !notes.isEmpty, !reviewBusy.contains(number) else { return }
+        func nextId(_ r: PRReview) -> Int64 { ((r.chat ?? []).map(\.id).max() ?? 0) + 1 }
+        editReview(number) { r in r.chat = (r.chat ?? []) + [ReviewChatTurn(id: nextId(r), mine: true, text: notes)] }
+        guard let review = reviews[number] else { return }
         reviewBusy.insert(number)
         defer { reviewBusy.remove(number); reviewSteps[number] = nil }
         reviewNotice[number] = nil
         do {
-            let run = try await Agents.run(.reviewNotes(review, notes: notes)) { step in
+            let run = try await Agents.run(.reviewTalk(review, message: notes)) { step in
                 Task { @MainActor [weak self] in self?.reviewSteps[number] = step }
             }
             guard let result = try? JSONDecoder().decode(ReviewNotesResult.self, from: Data(run.resultJSON.utf8)) else {
                 throw QuicksaveError.message("The agent's result could not be read.")
             }
             editReview(number) { r in
+                let before = (r.verdict, r.body, r.comments)
                 if let v = ReviewVerdict(rawValue: result.verdict) { r.verdict = v }
                 if r.bodyPublished == nil { r.body = Reviews.withoutLegend(result.body) }
                 for c in result.comments {
@@ -721,8 +794,10 @@ extension Store {
                 for rp in result.replies ?? [] {
                     if let i = r.comments.firstIndex(where: { $0.id == rp.id }), r.comments[i].published != nil { r.comments[i].reply = rp.text }
                 }
-                r.lastChange = result.summary
-                r.notes = ""
+                let changed = before.0 != r.verdict || before.1 != r.body || before.2 != r.comments
+                let answer = (result.answer ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                r.chat = (r.chat ?? []) + [ReviewChatTurn(id: nextId(r), mine: false, text: answer.isEmpty ? result.summary : answer,
+                                                          changed: changed ? result.summary : nil)]
                 if let s = run.sessionId { r.session = s }
             }
         } catch {
