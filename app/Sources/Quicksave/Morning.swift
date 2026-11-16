@@ -149,7 +149,7 @@ extension AgentJob {
             - You never write anything. After he approves the plan in the app, another job writes it to Linear.
             - Do not ask questions. Step 2's question is already answered by his comments below. If something is unclear, choose and say so in `notes`.
             - The result is the structured object, not a screen of text. Write it in English, because the app is in English: short sentences, no em-dashes, and every code with its 2-3 word tag, like `ES-12785 (30-day invitations)`.
-            - The weekly contract is the newest file matching ~/vault/Journal/*Weekly Contract.md. Read it only.
+            - The weekly contract is the open TEMI issue with the label "Weekly Contract": `orca linear list-issues --team TEMI --label "Weekly Contract" --json`, then `orca linear issue <id> --relations --json`. Read it only.
             - The calendar: Google Calendar's list_events, which is his work account. Only today, in one call: startTime "\(Morning.today)T00:00:00", endTime "\(Morning.today)T23:59:00", orderBy "startTime", pageSize 50. Never Notion Calendar: it answers with every calendar at once and the result is too large to read.
             - His open issues come in pages. With list_issues, keep passing the cursor until hasNextPage is false, or use `orca linear list-issues --assignee me --json`, which returns them all. Never decide from the first page only.
             - When his comments link something (a Slack thread, a Linear issue, a pull request), open it before deciding: it is there because it matters today. Linear comments hold meeting notes and decisions: read them when an issue's state depends on them.

@@ -11,4 +11,4 @@ On 12-nov-2026 Alejandro decided the weekly contract lives in Linear: an open TE
 
 **Why:** Linear is the only source of truth for the plan, and the vault file stayed half empty (Progreso, Material del SFA) once the Daily stopped.
 
-**How to apply:** pending code: `WeeklyContract.swift` (card), the morning job prompt in `Morning.swift` and `.claude/skills/quicksave-main-quest/SKILL.md` still read `~/vault/Journal/*Weekly Contract.md`. Switch them to Linear. Building the contract from inside the app is still to design.
+**How to apply:** since 16-nov the card (`WeeklyContract.swift`), the morning job and the Main Quest skill read it from Linear. Building the contract from inside the app is still to design.

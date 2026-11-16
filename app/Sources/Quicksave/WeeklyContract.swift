@@ -1,9 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// The week's contract, read from the newest `~/vault/Journal/*Weekly Contract.md` (read only), shown at the top of
-/// Today: the week's objectives with their priority, the issues each one stands on and how many are done.
-/// Where the contract lives is still to decide (10-nov); until then the vault's file is the source.
+/// The week's contract: the open TEMI issue with the label `Weekly Contract` (since 12-nov), shown at the top of
+/// Today. Its description lists the objectives, one line each: `1. [P0] What is true on Tuesday: ES-1 (tag), ES-2 (tag)`.
 struct WeeklyContract: Equatable {
     struct Issue: Equatable, Hashable { let id: String; let tag: String; let url: URL? }
     struct Objective: Equatable, Identifiable {
@@ -15,7 +14,10 @@ struct WeeklyContract: Equatable {
         var id: String { number }
     }
 
-    let file: URL
+    static let label = "Weekly Contract"
+
+    let code: String
+    let url: URL?
     let start: Date?
     let title: String
     let note: String?
@@ -25,7 +27,7 @@ struct WeeklyContract: Equatable {
     var end: Date? { start.flatMap { Calendar.current.date(byAdding: .day, value: 6, to: $0) } }
     var allIssues: [String] { objectives.flatMap { $0.issues.map(\.id) } }
 
-    /// "4-nov → 10-nov".
+    /// "11 Nov → 17 Nov".
     var range: String {
         guard let start, let end else { return "" }
         let f = DateFormatter(); f.locale = Locale(identifier: "en_GB"); f.dateFormat = "d MMM"
@@ -39,59 +41,67 @@ struct WeeklyContract: Equatable {
         return max(0, (Calendar.current.dateComponents([.day], from: today, to: end).day ?? -1) + 1)
     }
 
-    static func newest() -> WeeklyContract? {
-        let dir = URL(fileURLWithPath: NSHomeDirectory() + "/vault/Journal")
-        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else { return nil }
-        guard let name = names.filter({ $0.hasSuffix("Weekly Contract.md") }).sorted().last else { return nil }
-        let url = dir.appendingPathComponent(name)
-        guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
-        return parse(text, file: url, date: String(name.prefix(10)))
+    /// The open contract in Linear. Its due date is the Tuesday that closes the week, so the week starts six days before.
+    static func current(key: String) async -> WeeklyContract? {
+        guard let issue = try? await Linear.myOpenIssues(key: key, label: label).sorted(by: { ($0.dueDate ?? "") > ($1.dueDate ?? "") }).first,
+              let text = try? await Linear.description(key: key, id: issue.identifier) else { return nil }
+        let start = issue.dueDate.flatMap(QSDate.day).flatMap { Calendar.current.date(byAdding: .day, value: -6, to: $0) }
+        return parse(text, code: issue.identifier, url: URL(string: issue.url), title: issue.title, start: start)
     }
 
-    static func parse(_ text: String, file: URL, date: String) -> WeeklyContract {
-        var title = "", note: String?, objectives: [Objective] = [], carried: [String] = []
+    static func parse(_ text: String, code: String, url: URL?, title: String, start: Date?) -> WeeklyContract {
+        var note: String?, objectives: [Objective] = [], carried: [String] = []
         var section = ""
-        var inFront = false
-        for (i, raw) in text.components(separatedBy: "\n").enumerated() {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            if line == "---" && (i == 0 || inFront) { inFront.toggle(); continue }
-            if inFront { continue }
-            if line.hasPrefix("# ") { title = String(line.dropFirst(2)); continue }
-            if line.hasPrefix("## ") { section = line.lowercased(); continue }
-            if line.hasPrefix(">"), note == nil { note = line.drop { $0 == ">" }.trimmingCharacters(in: .whitespaces); continue }
-            guard line.hasPrefix("- ") else { continue }
-            let item = String(line.dropFirst(2))
-            if section.contains("objetivo") || section.contains("objective") { objectives.append(objective(item, index: objectives.count + 1)) }
-            else if section.contains("arrastro") || section.contains("carry") { carried.append(item) }
+        for raw in text.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: "\\[", with: "[").replacingOccurrences(of: "\\]", with: "]")
+            if line.isEmpty { continue }
+            if line.hasPrefix("#") { section = line.lowercased(); continue }
+            if section.isEmpty { if note == nil { note = line }; continue }
+            if section.contains("objective"), let r = line.range(of: #"^(\d+)\.\s+"#, options: .regularExpression) {
+                objectives.append(objective(String(line[r.upperBound...]), number: line[r].filter(\.isNumber)))
+            } else if section.contains("carried"), line.hasPrefix("- ") || line.hasPrefix("* ") {
+                carried.append(String(line.dropFirst(2)))
+            }
         }
-        return WeeklyContract(file: file, start: QSDate.day(date), title: title, note: note, objectives: objectives, carried: carried)
+        return WeeklyContract(code: code, url: url, start: start, title: title, note: note, objectives: objectives, carried: carried)
     }
 
-    /// "**1.** [P0] What → [ES-1 — tag](url), [ES-2 — tag](url). Sirve a Mo M1 (4-nov)."
-    static func objective(_ item: String, index: Int) -> Objective {
+    /// "[P0] What is true: ES-1 (tag), ES-2 (tag)". Linear may hand the codes back as plain text, markdown links or
+    /// `<issue label="ES-1" href="…" />` mentions; all three are read.
+    static func objective(_ item: String, number: String) -> Objective {
         var rest = item
-        var number = "\(index)"
-        if let r = rest.range(of: #"^\*\*(\d+)\.\*\*\s*"#, options: .regularExpression) {
-            number = rest[r].filter(\.isNumber)
-            rest = String(rest[r.upperBound...])
-        }
         var priority: String?
         if let r = rest.range(of: #"^\[(P\d)\]\s*"#, options: .regularExpression) {
             priority = String(rest[r]).trimmingCharacters(in: CharacterSet(charactersIn: "[] "))
             rest = String(rest[r.upperBound...])
         }
-        let parts = rest.components(separatedBy: "→")
-        let what = parts[0].trimmingCharacters(in: .whitespaces)
-        let tail = parts.count > 1 ? parts.dropFirst().joined(separator: "→") : rest
-        let re = try! NSRegularExpression(pattern: #"\[([A-Z]+-\d+)\s*[—-]\s*([^\]]+)\]\(([^)]+)\)"#)
+        var urls: [String: URL] = [:]
+        let mention = try! NSRegularExpression(pattern: #"<issue[^>]*label="([A-Z]+-\d+)"[^>]*href="([^"]+)"[^>]*/>"#)
+        let link = try! NSRegularExpression(pattern: #"\[([A-Z]+-\d+)[^\]]*\]\(([^)]+)\)"#)
+        for re in [mention, link] {
+            let ns = rest as NSString
+            for m in re.matches(in: rest, range: NSRange(location: 0, length: ns.length)) {
+                urls[ns.substring(with: m.range(at: 1))] = URL(string: ns.substring(with: m.range(at: 2)))
+            }
+            rest = re.stringByReplacingMatches(in: rest, range: NSRange(location: 0, length: ns.length), withTemplate: "$1")
+        }
+        var what = rest, tail = ""
+        if let r = rest.range(of: #":\s*(?=[A-Z]+-\d+)"#, options: .regularExpression) {
+            what = String(rest[..<r.lowerBound]); tail = String(rest[r.upperBound...])
+        }
+        let code = try! NSRegularExpression(pattern: #"([A-Z]+-\d+)(?:\s*\(([^)]*)\))?"#)
         let ns = tail as NSString
-        let issues = re.matches(in: tail, range: NSRange(location: 0, length: ns.length)).map {
-            Issue(id: ns.substring(with: $0.range(at: 1)), tag: ns.substring(with: $0.range(at: 2)), url: URL(string: ns.substring(with: $0.range(at: 3))))
+        let issues = code.matches(in: tail, range: NSRange(location: 0, length: ns.length)).map { m -> Issue in
+            let id = ns.substring(with: m.range(at: 1))
+            let tag = m.range(at: 2).location == NSNotFound ? "" : ns.substring(with: m.range(at: 2))
+            return Issue(id: id, tag: tag, url: urls[id] ?? URL(string: "https://linear.app/alan-eu/issue/\(id)"))
         }
         var serves: String?
-        if let r = tail.range(of: #"(Sirve a|Serves)[^.]*"#, options: .regularExpression) { serves = String(tail[r]) }
-        return Objective(number: number, priority: priority, text: parts.count > 1 ? what : re.stringByReplacingMatches(in: what, range: NSRange(location: 0, length: (what as NSString).length), withTemplate: "$1"),
-                         issues: issues, serves: serves)
+        if let r = what.range(of: #"\.?\s*Serves [^.]*"#, options: .regularExpression) {
+            serves = what[r].trimmingCharacters(in: CharacterSet(charactersIn: ". "))
+            what.removeSubrange(r)
+        }
+        return Objective(number: number, priority: priority, text: what.trimmingCharacters(in: .whitespaces), issues: issues, serves: serves)
     }
 }
 
@@ -114,7 +124,7 @@ struct WeekContractCard: View {
                 let done = objectivesDone
                 Text("\(done) of \(contract.objectives.count) objectives done").font(Theme.Text.number)
                     .foregroundStyle(done == contract.objectives.count && done > 0 ? .yellow : Theme.Palette.textSecondary)
-                QSIconButton(systemImage: "doc.text", help: "Open the contract in the vault") { NSWorkspace.shared.open(contract.file) }
+                if let url = contract.url { QSIconButton(systemImage: "arrow.up.right.square", help: "Open \(contract.code) in Linear") { NSWorkspace.shared.open(url) } }
             }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), spacing: Theme.Space.m, alignment: .top)], alignment: .leading, spacing: Theme.Space.m) {
                 ForEach(contract.objectives) { tile($0) }

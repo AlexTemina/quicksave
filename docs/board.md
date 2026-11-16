@@ -86,8 +86,7 @@ Orca owns which worktree belongs to which issue (`orca reference find <issue>`).
 ## The week's contract
 
 - At the top of Today, a card with the week's contract: its dates, how many days are left ("Last day", or "Over: a new contract is due"), and one tile per objective with its priority (P0 red, P1 orange, P2 grey), its text, the issues it names with their live state from Linear (done ones crossed out), a bar of done over total and what it serves. An objective whose issues are all done turns gold.
-- Read from Linear (12-nov): the open TEMI issue with the label `Weekly Contract`, every refresh. Objectives are the numbered items under `## Objectives`, each with its priority and its issues; "Carried over" folds `## Carried over`. A button opens the issue in Linear.
-- Until the code follows, the card still reads the newest `~/vault/Journal/*Weekly Contract.md`, whose last one is 4-nov.
+- Read from Linear (12-nov): the open TEMI issue with the label `Weekly Contract`, every refresh. Objectives are the numbered lines under `## Objectives`, `1. [P0] What: ES-1 (tag), ES-2 (tag)`, each with its priority and its issues; the week runs from six days before its due date (the Tuesday) to it; "Carried over" folds `## Carried over`. A button opens the issue in Linear.
 - How the contract is made: the vault's `Claude/templates/weekly-contract.md` and `/weekly-contract`, on Tuesday afternoon after the Spain area weekly. Building it from the app is still to design.
 
 ## Layout and progress

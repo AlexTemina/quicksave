@@ -831,12 +831,12 @@ final class Store: ObservableObject {
         }
     }
 
-    /// The week's contract from the vault, and the live state of the issues its objectives name.
+    /// The week's contract from Linear, and the live state of the issues its objectives name.
     @Published var contract: WeeklyContract?
     @Published var contractIssues: [String: Linear.QueueIssue] = [:]
 
     private func refreshContract(key: String) async {
-        contract = WeeklyContract.newest()
+        contract = await WeeklyContract.current(key: key)
         guard let ids = contract?.allIssues, !ids.isEmpty, let found = try? await Linear.issues(key: key, ids: ids) else { return }
         contractIssues = Dictionary(found.map { ($0.identifier, $0) }, uniquingKeysWith: { a, _ in a })
     }

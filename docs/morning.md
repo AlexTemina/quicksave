@@ -37,7 +37,7 @@ Each one is a [background agent](background-agents.md) with its own list of allo
 
 | Job | Reads | Writes |
 |---|---|---|
-| Plan | Linear with its comments, the weekly contract in the vault, his work Google Calendar, the Slack threads his comments link | Nothing |
+| Plan | Linear with its comments, the weekly contract (a TEMI issue), his work Google Calendar, the Slack threads his comments link | Nothing |
 | Write | Linear | The Main Quest through `orca linear`: create, relations, due date |
 | Games | Only what the app passes it | Nothing |
 | Standup | Slack and Linear | Nothing: returns the text |

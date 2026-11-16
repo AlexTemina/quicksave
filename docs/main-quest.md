@@ -43,5 +43,5 @@ These rules were deduced from his days from 20-oct to 5-nov and are polished wit
 
 ## Open
 
-- The weekly contract lives in Linear since 12-nov: the open TEMI issue with the label `Weekly Contract`. Its objectives are the candidates of rule 1. The skill and the morning job still read the vault file until the code follows.
+- The weekly contract lives in Linear since 12-nov: the open TEMI issue with the label `Weekly Contract`. Its objectives are the candidates of rule 1.
 

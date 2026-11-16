@@ -17,7 +17,7 @@ Read them at the moment of running, never from memory. A source that fails is na
   - The open Main Quest: `orca linear list-issues --team TEMI --label "Main Quest" --json`, then ignore closed ones.
   - His open work: `orca linear list-issues --assignee me --json`, with states and due dates.
   - One issue with its relations: `orca linear issue <id> --relations --json`.
-- **Weekly contract:** the newest `~/vault/Journal/*Weekly Contract.md`, read only. It names the week's objectives and the milestone and date each one serves. Interim source until the contract is redesigned.
+- **Weekly contract:** the open TEMI issue with the label `Weekly Contract` (`orca linear list-issues --team TEMI --label "Weekly Contract" --json`, then `orca linear issue <id> --relations --json`), read only. Its description lists the week's objectives, one line each, with their priority and issues; its due date is the Tuesday that closes the week.
 - **The day:** today's meetings from Google Calendar (`list_events`), which is his work account `alex.temina@alan.eu`. Ask for that day only, ordered by start time. Not Notion Calendar: it returns every connected calendar at once, too large to read (855k characters on 9-nov). Then ask him anyway whether anything the calendar does not show changes the plan.
 
 ## Steps
