@@ -966,7 +966,7 @@ struct QSTabBar<Tab: Hashable>: View {
                 let selected = item.tab == selection
                 Button { selection = item.tab } label: {
                     HStack(spacing: Theme.Space.xs + 2) {
-                        Text(item.title).font(Theme.Text.cardTitle.weight(selected ? .semibold : .regular))
+                        Text(item.title).font(Theme.Text.cardTitle.weight(selected ? .semibold : .regular)).fixedSize()
                         if item.count > 0 {
                             Text("\(item.count)").font(Theme.Text.meta.monospacedDigit()).foregroundStyle(Theme.Palette.textSecondary)
                         }

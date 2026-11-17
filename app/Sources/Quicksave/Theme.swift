@@ -71,6 +71,13 @@ enum Theme {
         static let finished = prMerged
         /// New items in a tab he has not looked at yet.
         static let badge = prFailing
+        /// A background agent run, by state.
+        static let runQueued = agentIdle
+        static let runRunning = agentWorking
+        static let runDone = prOpen
+        static let runNeedsYou = agentAsking
+        static let runFailed = prFailing
+        static let runCancelled = prDraft
     }
 
     enum Text {
@@ -122,6 +129,8 @@ enum Theme {
         static let morningWidth: CGFloat = 720
         /// Reviews: the list of pull requests on the left, the review on the right.
         static let reviewListWidth: CGFloat = 330
+        /// Agents: the runs on the left, the one he picked on the right.
+        static let runListWidth: CGFloat = 340
         static let flowHeight: CGFloat = 640
         static let notesMinHeight: CGFloat = 160
         static let morningHeight: CGFloat = 800
@@ -146,6 +155,8 @@ enum Theme {
         static let collectibles = "diamond.fill"
         static let review = "eye"
         static let published = "checkmark.seal.fill"
+        static let agents = "cpu"
+        static let cancel = "xmark.circle.fill"
     }
 
     /// The app's crystal as pixel art for the menu bar, one point per pixel. The outline keeps it legible on a light bar.

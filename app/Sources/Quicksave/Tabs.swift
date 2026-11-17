@@ -23,6 +23,8 @@ extension Store {
         case .inbox: return Set(pendingCards.map(\.id))
         case .reviews: return Set(reviewRequests.map { "pr:\($0.number)" })
         case .drafts: return Set(drafts.map { "draft:\($0.id)" })
+        // Runs that ended with something for him: failed or needing him.
+        case .agents: return Set(AgentMonitor.shared.runs.filter { $0.state == .failed || $0.state == .needsYou }.map { "run:\($0.id)" })
         }
     }
 

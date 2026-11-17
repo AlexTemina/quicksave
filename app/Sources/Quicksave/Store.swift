@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import Foundation
 
-enum AppTab: String, Hashable, CaseIterable { case today, inbox, reviews, drafts }
+enum AppTab: String, Hashable, CaseIterable { case today, inbox, reviews, drafts, agents }
 
 @MainActor
 final class Store: ObservableObject {
@@ -11,6 +11,7 @@ final class Store: ObservableObject {
         case "inbox": return .inbox
         case "drafts": return .drafts
         case "reviews": return .reviews
+        case "agents": return .agents
         default: return .today
         }
     }()

@@ -52,6 +52,13 @@ final class Database {
                   id INTEGER PRIMARY KEY AUTOINCREMENT, date TEXT NOT NULL, score TEXT NOT NULL, game TEXT NOT NULL,
                   simile TEXT NOT NULL, link TEXT)
                 """, nil, nil, nil)
+            // Every background agent run, with what it did. The transcript itself is a file. See docs/background-agents.md.
+            sqlite3_exec(db, """
+                CREATE TABLE IF NOT EXISTS agent_runs (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT, job TEXT NOT NULL, directory TEXT NOT NULL, model TEXT NOT NULL,
+                  state TEXT NOT NULL, queued REAL NOT NULL, started REAL, ended REAL, cost REAL, turns INTEGER,
+                  denials TEXT, result TEXT, error TEXT, session TEXT, transcript TEXT)
+                """, nil, nil, nil)
         }
         chmod(path, 0o600)
         let uuid = Self.hardwareUUID() ?? "quicksave-no-hardware-uuid"
@@ -259,6 +266,82 @@ final class Database {
             }
             addGame(date: cols[1], score: cols[2], game: game, simile: cols[4], link: link)
         }
+    }
+
+    // MARK: Agent runs
+
+    func insertRun(job: String, directory: String, model: String, queued: Date) -> Int64 {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "INSERT INTO agent_runs (job, directory, model, state, queued) VALUES (?, ?, ?, ?, ?)", -1, &stmt, nil) == SQLITE_OK else { return 0 }
+        sqlite3_bind_text(stmt, 1, job, -1, Self.transient)
+        sqlite3_bind_text(stmt, 2, directory, -1, Self.transient)
+        sqlite3_bind_text(stmt, 3, model, -1, Self.transient)
+        sqlite3_bind_text(stmt, 4, AgentRunState.queued.rawValue, -1, Self.transient)
+        sqlite3_bind_double(stmt, 5, queued.timeIntervalSince1970)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { return 0 }
+        return sqlite3_last_insert_rowid(db)
+    }
+
+    func updateRun(_ r: AgentRunRecord) {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        let sql = "UPDATE agent_runs SET state = ?, started = ?, ended = ?, cost = ?, turns = ?, denials = ?, result = ?, error = ?, session = ?, transcript = ? WHERE id = ?"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return }
+        func text(_ i: Int32, _ v: String?) { if let v { sqlite3_bind_text(stmt, i, v, -1, Self.transient) } else { sqlite3_bind_null(stmt, i) } }
+        func real(_ i: Int32, _ v: Double?) { if let v { sqlite3_bind_double(stmt, i, v) } else { sqlite3_bind_null(stmt, i) } }
+        text(1, r.state.rawValue)
+        real(2, r.started?.timeIntervalSince1970)
+        real(3, r.ended?.timeIntervalSince1970)
+        real(4, r.cost)
+        if let t = r.turns { sqlite3_bind_int64(stmt, 5, Int64(t)) } else { sqlite3_bind_null(stmt, 5) }
+        text(6, r.denials.isEmpty ? nil : (try? JSONEncoder().encode(r.denials)).flatMap { String(data: $0, encoding: .utf8) })
+        text(7, r.result)
+        text(8, r.error)
+        text(9, r.sessionId)
+        text(10, r.transcript)
+        sqlite3_bind_int64(stmt, 11, r.id)
+        sqlite3_step(stmt)
+    }
+
+    /// Runs, newest first.
+    func runs(limit: Int = 500) -> [AgentRunRecord] {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        let sql = "SELECT id, job, directory, model, state, queued, started, ended, cost, turns, denials, result, error, session, transcript FROM agent_runs ORDER BY id DESC LIMIT ?"
+        guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
+        sqlite3_bind_int64(stmt, 1, Int64(limit))
+        func text(_ i: Int32) -> String? { sqlite3_column_text(stmt, i).map { String(cString: $0) } }
+        func real(_ i: Int32) -> Double? { sqlite3_column_type(stmt, i) == SQLITE_NULL ? nil : sqlite3_column_double(stmt, i) }
+        var out: [AgentRunRecord] = []
+        while sqlite3_step(stmt) == SQLITE_ROW {
+            let denials = text(10).flatMap { try? JSONDecoder().decode([String].self, from: Data($0.utf8)) } ?? []
+            out.append(AgentRunRecord(
+                id: sqlite3_column_int64(stmt, 0), job: text(1) ?? "", directory: text(2) ?? "", model: text(3) ?? "",
+                state: AgentRunState(rawValue: text(4) ?? "") ?? .failed,
+                queued: Date(timeIntervalSince1970: real(5) ?? 0),
+                started: real(6).map(Date.init(timeIntervalSince1970:)), ended: real(7).map(Date.init(timeIntervalSince1970:)),
+                cost: real(8), turns: real(9).map(Int.init), denials: denials, result: text(11), error: text(12),
+                sessionId: text(13), transcript: text(14)))
+        }
+        return out
+    }
+
+    /// Transcripts of runs that ended before `cutoff`: their files are deleted, the rows stay.
+    func dropTranscripts(before cutoff: Date) -> [String] {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "SELECT transcript FROM agent_runs WHERE transcript IS NOT NULL AND queued < ?", -1, &stmt, nil) == SQLITE_OK else { return [] }
+        sqlite3_bind_double(stmt, 1, cutoff.timeIntervalSince1970)
+        var paths: [String] = []
+        while sqlite3_step(stmt) == SQLITE_ROW { if let p = sqlite3_column_text(stmt, 0) { paths.append(String(cString: p)) } }
+        var clear: OpaquePointer?
+        defer { sqlite3_finalize(clear) }
+        if sqlite3_prepare_v2(db, "UPDATE agent_runs SET transcript = NULL WHERE queued < ?", -1, &clear, nil) == SQLITE_OK {
+            sqlite3_bind_double(clear, 1, cutoff.timeIntervalSince1970)
+            sqlite3_step(clear)
+        }
+        return paths
     }
 
     private func get(_ name: String) -> Data? {

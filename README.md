@@ -68,6 +68,13 @@ See [Main Quest](docs/main-quest.md) for the full rules.
 - A tab with the text the agents leave for you to post yourself: where it goes, a note on what to do, a copy button and a link to the place.
 - Select the ones already posted and archive them. Archived drafts can be restored.
 
+### Agents
+
+- A tab with every background agent Quicksave started: job, state (queued, running, done, needs you, failed, cancelled), when, how long and what it cost.
+- Picking a run shows its numbers, the actions it was denied, its result and every step it took, with what came back. The full output opens in one click.
+- What is running now shows in a strip at the bottom of every tab, with a button to cancel it.
+- Runs in the same folder take turns. Full outputs are kept for 30 days, the rest of the run for good.
+
 ### Hover cards
 
 - Resting the pointer on any link, anywhere in the app, shows a small card. Linear issues and GitHub pull requests show their state, title, key facts and the start of the description; any other page its title and summary. Slack links do not have one yet.

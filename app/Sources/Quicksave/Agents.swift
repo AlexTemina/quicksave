@@ -17,6 +17,8 @@ struct AgentJob {
     /// A past session to continue, so the agent remembers what it read. Always forked: the original stays as it was,
     /// and two drafts of the same session can be talked over at once.
     var resume: String? = nil
+    /// Reads the result and says whether something in it is left for him, so the run shows as "needs you".
+    var needsYou: (@Sendable (String) -> Bool)? = nil
 }
 
 struct AgentRun {
@@ -33,8 +35,9 @@ struct AgentRun {
 enum Agents {
     static var claude: String { NSHomeDirectory() + "/.local/bin/claude" }
 
-    /// Runs a job. With `onStep`, the agent's output streams and each action it takes is told as a few words
-    /// ("Reading Linear"), so a conversation can show what it is doing while it works.
+    /// Runs a job. Every run is recorded with its full output and waits its turn in its folder (see `AgentMonitor`).
+    /// With `onStep`, each action it takes is also told as a few words ("Reading Linear"), so a conversation can show
+    /// what it is doing while it works.
     static func run(_ job: AgentJob, onStep: (@Sendable (String) -> Void)? = nil) async throws -> AgentRun {
         guard FileManager.default.isExecutableFile(atPath: claude) else {
             throw QuicksaveError.message("Claude Code is not installed where Quicksave looks for it (\(claude)).")
@@ -42,59 +45,82 @@ enum Agents {
         guard FileManager.default.fileExists(atPath: job.directory) else {
             throw QuicksaveError.message("The folder the \(job.name) job runs in does not exist: \(job.directory)")
         }
+        let monitor = await AgentMonitor.shared
+        let record = await monitor.enqueue(job)
+        let id = record.id
+        let key = AgentMonitor.lockKey(job.directory)
+        try await monitor.waitTurn(id, key: key)
+        let outcome: Result<AgentRun, Error>
+        do { outcome = .success(try await launch(job, id: id, transcript: record.transcript, onStep: onStep)) }
+        catch { outcome = .failure(error) }
+        let cancelled = await monitor.wasCancelled(id)
+        var needsYou = false
+        if case .success(let run) = outcome { needsYou = job.needsYou?(run.resultJSON) ?? false }
+        await monitor.finish(id, key: key, outcome: outcome, needsYou: needsYou)
+        if cancelled { throw QuicksaveError.message("Cancelled from Quicksave.") }
+        return try outcome.get()
+    }
+
+    private static func launch(_ job: AgentJob, id: Int64, transcript: String?,
+                               onStep: (@Sendable (String) -> Void)?) async throws -> AgentRun {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: claude)
+        p.currentDirectoryURL = URL(fileURLWithPath: job.directory)
+        // Settings of the project only: his global hooks (stop checks, state reporters) are noise for a job.
+        // The prompt goes through standard input so the list options cannot swallow it.
+        var args: [String] = ["-p", "--model", job.model, "--permission-mode", "dontAsk", "--setting-sources", "project,local",
+                              "--max-turns", "\(job.maxTurns)", "--output-format", "stream-json", "--verbose"]
+        args += ["--allowedTools", job.allowed.joined(separator: ","),
+                 "--disallowedTools", job.denied.joined(separator: ","),
+                 "--json-schema", job.schema]
+        args += job.extraDirectories.flatMap { ["--add-dir", $0] }
+        if let resume = job.resume { args += ["--resume", resume, "--fork-session"] }
+        p.arguments = args
+        var env = ProcessInfo.processInfo.environment
+        env["CLAUDE_CONFIG_DIR"] = nil
+        let home = NSHomeDirectory()
+        env["PATH"] = ["/Applications/Orca.app/Contents/Resources/bin", "/opt/homebrew/bin", "/usr/local/bin",
+                       home + "/.local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
+        p.environment = env
+
+        let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
+        p.standardInput = stdin
+        p.standardOutput = stdout
+        p.standardError = stderr
+
+        var file: FileHandle?
+        if let transcript, FileManager.default.createFile(atPath: transcript, contents: nil, attributes: [.posixPermissions: 0o600]) {
+            file = FileHandle(forWritingAtPath: transcript)
+        }
+
         return try await withCheckedThrowingContinuation { cont in
-            let p = Process()
-            p.executableURL = URL(fileURLWithPath: claude)
-            p.currentDirectoryURL = URL(fileURLWithPath: job.directory)
-            // Settings of the project only: his global hooks (stop checks, state reporters) are noise for a job.
-            // The prompt goes through standard input so the list options cannot swallow it.
-            let format: [String] = onStep == nil ? ["--output-format", "json"] : ["--output-format", "stream-json", "--verbose"]
-            var args: [String] = ["-p", "--model", job.model, "--permission-mode", "dontAsk", "--setting-sources", "project,local",
-                                  "--max-turns", "\(job.maxTurns)"]
-            args += format
-            args += ["--allowedTools", job.allowed.joined(separator: ","),
-                     "--disallowedTools", job.denied.joined(separator: ","),
-                     "--json-schema", job.schema]
-            args += job.extraDirectories.flatMap { ["--add-dir", $0] }
-            if let resume = job.resume { args += ["--resume", resume, "--fork-session"] }
-            p.arguments = args
-            var env = ProcessInfo.processInfo.environment
-            env["CLAUDE_CONFIG_DIR"] = nil
-            let home = NSHomeDirectory()
-            env["PATH"] = ["/Applications/Orca.app/Contents/Resources/bin", "/opt/homebrew/bin", "/usr/local/bin",
-                           home + "/.local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].joined(separator: ":")
-            p.environment = env
-
-            let stdin = Pipe(), stdout = Pipe(), stderr = Pipe()
-            p.standardInput = stdin
-            p.standardOutput = stdout
-            p.standardError = stderr
-
             let box = Box()
             let group = DispatchGroup()
             group.enter()
-            if let onStep {
-                // One JSON event per line: tell each action as it happens, and keep the last line, the result.
-                DispatchQueue.global().async {
-                    var pending = Data()
-                    let handle = stdout.fileHandleForReading
-                    while true {
-                        let chunk = handle.availableData
-                        if chunk.isEmpty { break }
-                        pending.append(chunk)
-                        while let nl = pending.firstIndex(of: 0x0A) {
-                            let line = pending[pending.startIndex..<nl]
-                            pending = Data(pending[pending.index(after: nl)...])
-                            guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
-                            if obj["type"] as? String == "result" { box.out = Data(line) }
-                            else if let step = step(from: obj) { onStep(step) }
+            // One JSON event per line: keep each in the transcript, tell each action as it happens, and keep the
+            // last line, the result.
+            DispatchQueue.global().async {
+                var pending = Data()
+                let handle = stdout.fileHandleForReading
+                while true {
+                    let chunk = handle.availableData
+                    if chunk.isEmpty { break }
+                    try? file?.write(contentsOf: chunk)
+                    pending.append(chunk)
+                    while let nl = pending.firstIndex(of: 0x0A) {
+                        let line = pending[pending.startIndex..<nl]
+                        pending = Data(pending[pending.index(after: nl)...])
+                        guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any] else { continue }
+                        if obj["type"] as? String == "result" { box.out = Data(line) }
+                        else if let step = step(from: obj) {
+                            onStep?(step)
+                            Task { @MainActor in AgentMonitor.shared.step(id, step) }
                         }
                     }
-                    if !pending.isEmpty, box.out.isEmpty { box.out = pending }
-                    group.leave()
                 }
-            } else {
-                DispatchQueue.global().async { box.out = stdout.fileHandleForReading.readDataToEndOfFile(); group.leave() }
+                if !pending.isEmpty, box.out.isEmpty { box.out = pending }
+                try? file?.close()
+                group.leave()
             }
             group.enter()
             DispatchQueue.global().async { box.err = stderr.fileHandleForReading.readDataToEndOfFile(); group.leave() }
@@ -105,7 +131,8 @@ enum Agents {
                     cont.resume(with: Result { try parse(box.out, box.err, Date().timeIntervalSince(started)) })
                 }
             }
-            do { try p.run() } catch { cont.resume(throwing: error); return }
+            do { try p.run() } catch { try? file?.close(); cont.resume(throwing: error); return }
+            Task { @MainActor in AgentMonitor.shared.started(id, process: p) }
             stdin.fileHandleForWriting.write(Data(job.prompt.utf8))
             try? stdin.fileHandleForWriting.close()
         }
@@ -130,7 +157,7 @@ enum Agents {
         return nil
     }
 
-    private static func describe(tool name: String, input: [String: Any]) -> String {
+    static func describe(tool name: String, input: [String: Any]) -> String {
         let lower = name.lowercased()
         if lower.contains("linear") { return "Reading Linear" }
         if lower.contains("slack") { return "Reading Slack" }
@@ -229,7 +256,11 @@ extension AgentJob {
             schema: """
             {"type":"object","properties":{"items":{"type":"array","items":{"type":"object","properties":{"id":{"type":"string"},"outcome":{"type":"string","enum":["done","needs_you","failed","skipped","needs_worktree"]},"summary":{"type":"string"},"links":{"type":"array","items":{"type":"string"}},"worktree":{"type":"string"},"task":{"type":"string"}},"required":["id","outcome","summary"]}},"drafts":{"type":"array","items":{"type":"object","properties":{"where":{"type":"string","enum":["Linear","Slack","GitHub","Mail","Other"]},"note":{"type":"string"},"link":{"type":"string"},"item":{"type":"string"},"text":{"type":"string"}},"required":["where","text"]}},"notes":{"type":"string"}},"required":["items","drafts"]}
             """,
-            maxTurns: 80)
+            maxTurns: 80,
+            needsYou: { result in
+                let items = (try? JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any])?["items"] as? [[String: Any]]
+                return items?.contains { $0["outcome"] as? String == "needs_you" } ?? false
+            })
     }
 }
 

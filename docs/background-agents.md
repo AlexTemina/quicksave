@@ -1,4 +1,4 @@
-# Background agents (designed, not built)
+# Background agents
 
 Quicksave starts agents in the background for jobs it cannot do itself. One piece of the app does it, whatever the job: applying the [inbox](inbox.md) first, others later.
 
@@ -15,12 +15,14 @@ Quicksave starts agents in the background for jobs it cannot do itself. One piec
 - What it may do: a list of allowed actions and a list of denied ones.
 - The model, the effort and a limit of turns.
 
-## How the app runs it
+## How the app runs it (built 16-nov-2026)
 
-- One background process per job. Jobs queue and run one at a time per folder, because two runs in the same worktree would collide.
-- States: queued, running, done, needs you, failed. What is running, since when, and a cancel button are always visible.
-- The result is read as data. A result that cannot be read counts as failed and shows the raw text.
-- Every run is kept in the local database: job, start, duration, cost, outcome and what was denied.
+- One background process per job. Jobs queue and run one at a time per folder, because two runs in the same worktree would collide. Jobs in the temporary folder touch no files and never wait.
+- States: queued, running, done, needs you, failed, cancelled. "Needs you" means it finished and its result leaves something for him (for the apply, an item it could not finish). A denied action alone does not count: the run shows as done, with a "denied" tag on its row.
+- What is running, since when and what it is doing shows in a strip at the bottom of every tab, with a cancel button. Cancelling a queued run means it never starts. Cancelling a running one stops it.
+- The result is read as data. A result that cannot be read counts as failed.
+- Every run is kept in the local database: job, folder, model, start, duration, cost, turns, outcome, result, error and what was denied. Its full output, every event the agent printed, is a file next to the database, kept for 30 days. After that the row stays and the file goes.
+- The Agents tab lists every run and shows, for the one picked, what it said, each action it took and what came back.
 - A result that needs him goes back to the inbox as a card. Drafts go to [Drafts](drafts.md).
 
 ## Permissions (decided 6-nov-2026: a list, never skip)

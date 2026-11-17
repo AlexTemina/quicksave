@@ -450,7 +450,9 @@ extension AgentJob {
                               "mcp__claude_ai_Slack__slack_search_public_and_private", "mcp__claude_ai_Slack__slack_search_public",
                               "mcp__claude_ai_Slack__slack_read_thread", "mcp__claude_ai_Slack__slack_read_channel",
                               "mcp__claude_ai_Slack__slack_search_channels", "mcp__claude_ai_Slack__slack_search_users",
-                              "mcp__claude_ai_Notion__notion-search", "mcp__claude_ai_Notion__notion-fetch"] + Morning.readLinear
+                              "mcp__claude_ai_Notion__notion-search", "mcp__claude_ai_Notion__notion-fetch",
+                              // The Linear server alan-apps declares for itself, same reads under another name.
+                              "mcp__linear-server__get_issue", "mcp__linear-server__list_comments"] + Morning.readLinear
     /// No "Edit" here: denying Edit also denies every file write, which killed the flow page (12-nov). Unlisted edits are
     /// refused anyway, since the job runs in dontAsk mode.
     static let reviewNever = Morning.neverPost + ["NotebookEdit", "Bash(git push:*)", "Bash(git commit:*)", "Bash(git checkout:*)",
