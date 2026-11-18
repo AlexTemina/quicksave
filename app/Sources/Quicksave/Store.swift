@@ -422,6 +422,7 @@ final class Store: ObservableObject {
     /// when the work needs no worktree, the app opens the agent in the vault. Either way the tab carries the issue's
     /// code, which is how the card finds it next time.
     func startAgent(_ piece: Piece) async {
+        startWork(piece)
         if piece.onCall { await startOnCallAgent(piece); return }
         guard !startingAgents.contains(piece.id) else { return }
         startingAgents.insert(piece.id)
@@ -543,7 +544,13 @@ final class Store: ObservableObject {
     private var watchTick = 0
 
     /// The cards being watched: every card on the board in Pending for inputs or In Review.
-    var watchedCards: [Piece] { ((quest?.pieces ?? []) + sideQuests + looseWork).filter { [.pending, .inReview].contains($0.column) } }
+    /// Cards waiting on someone else, on both boards: on-call cards were left out until 18-nov and never got a look.
+    var watchedCards: [Piece] {
+        var out: [Piece] = []
+        for p in (quest?.pieces ?? []) + sideQuests + looseWork + onCallCards
+        where [.pending, .inReview].contains(p.column) && !out.contains(where: { $0.id == p.id }) { out.append(p) }
+        return out
+    }
 
     /// Agents asked to fix a red CI, by issue: when they asked, and whether they have been seen working since. When one
     /// stops, its last reply goes to him on Telegram.
@@ -1001,6 +1008,13 @@ final class Store: ObservableObject {
             moveNotice = "\(id) could not move to \(column.rawValue): \(error.localizedDescription)"
         }
         moving[id] = nil
+    }
+
+    /// He starts on a card, with Play or by going to its agent or worktree: a card still in Todo moves to
+    /// In Progress in Linear. A card further along stays where it is.
+    func startWork(_ piece: Piece) {
+        guard piece.column == .todo, moving[piece.id] == nil else { return }
+        Task { await move(piece.id, to: .inProgress) }
     }
 
     func removeFromToday(_ id: String) async {

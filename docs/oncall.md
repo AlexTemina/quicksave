@@ -27,6 +27,7 @@ The tab's main button. He presses it when the shift starts and any time during t
 - On each card he can change the priority and whether it enters, by hand, and write a correction in a big text box, as in [Reviews](reviews.md). A conversation at the bottom takes corrections for the whole draft; the agent changes the cards in the same turn and says what changed.
 - **Apply** writes to Linear (priority, state, triage) and puts the entering cards on the on-call board. It starts no agent (18-nov): he starts each one from its card.
 - Pressing it again later only proposes what changed since the last review: new issues, new Slack calls, priorities someone else changed, issues closed.
+- Review is disabled while the current review has a conversation and cards not applied yet: a new review replaces the current one, conversation included, and would lose what he asked (18-nov). Apply first.
 
 ## Groups (18-nov)
 

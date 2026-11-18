@@ -15,6 +15,7 @@ What the app shows, and nothing else yet.
 - Two buttons on each card, shown on hover: open the issue in Linear, go to its worktree in Orca.
 - Clicking a card opens its detail, read through the issue template: Context with the Goal, Actions (Steps) and QA as checklists, Watch out, and the rest folded under More. Common heading names (Acceptance criteria, Plan, Background…) map to the same sections.
 - Dragging a card to another column moves its issue to that state in Linear, in either board. The card shows in its new column at once, faded, until Linear confirms and the board refreshes; if Linear refuses, a note says why and the card goes back.
+- Starting on a card moves it to In Progress in Linear when it is still in Todo: pressing Play, or going to its agent or worktree in Orca. A card already further along (In Review, Pending, Done) stays where it is (18-nov).
 - Empty columns show only their dot and name, sideways. When a board has an empty column, columns with cards stop growing at a set width and the empty ones take the rest, so every state keeps its place and Done stays on the right. Three done pieces filling three quarters of the row did not look done (9-nov).
 - Everything clickable reacts on hover.
 - A done card with no worktree and no agent left in Orca is finished for good: it sinks into the column (no shadow), takes a soft purple wash and edge, dims its content and carries a big purple seal stamped on its right edge, tilted, with no text. Done pieces stay on the Main Quest's board while it lives, so after days on the same Main Quest the settled ones must read apart from those still holding a worktree (13-nov).
@@ -38,7 +39,7 @@ Orca owns which worktree belongs to which issue (`orca reference find <issue>`).
 - A refresh button.
 - A refresh every time Alejandro comes back: the window gets focus, or the menu opens.
 - An automatic refresh every minute, no more often.
-- The board reads Linear and writes only one thing: an issue's state, when he drags its card to another column. The other parts of the app that write are the [inbox](inbox.md) and the [morning](morning.md). The personal API key is pasted once in Settings and stored encrypted (AES-GCM, key derived from this Mac's hardware UUID) in a local SQLite database, `~/Library/Application Support/Quicksave/quicksave.sqlite`.
+- The board reads Linear and writes only one thing: an issue's state, when he drags its card to another column or starts on a card in Todo. The other parts of the app that write are the [inbox](inbox.md) and the [morning](morning.md). The personal API key is pasted once in Settings and stored encrypted (AES-GCM, key derived from this Mac's hardware UUID) in a local SQLite database, `~/Library/Application Support/Quicksave/quicksave.sqlite`.
 
 ## Side quests and collectibles
 
@@ -119,6 +120,8 @@ Orca owns which worktree belongs to which issue (`orca reference find <issue>`).
 ## Watching what waits
 
 A card in **Pending for inputs** or **In Review** waits for someone else. The app looks for the answer so he does not have to (11-nov).
+
+- It covers both boards, Today's and the [on-call](oncall.md) one. On-call cards were left out until 18-nov: they said "first look soon" forever.
 
 - **Every 10 minutes, with no Claude and no tokens:** new comments on the issue in Linear; reviews, comments, CI turning green or red, merged, closed or conflicts on its pull requests; answers in the GitHub discussions it links. His own comments and integrations (`linear-code`, `alan-pr-check`, bots) never count.
 - **Every 30 minutes, Slack:** the threads the issue links (in its description, comments or attachments) are read by a small agent on Haiku that only reads. It only runs when a waiting card links a thread, so it costs nothing on most checks.

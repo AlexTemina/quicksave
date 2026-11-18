@@ -13,7 +13,7 @@ Nothing here is inherited from older setups (the vault, global rules). A rule ex
 - Every code (issue, PR) carries a 2-3 word tag of what it is: `ES-12785 (30-day invitations)`, never a bare id.
 - The app's interface is in English only, for now.
 - Linear is the source of truth for tasks and their state. Quicksave reads it and never keeps its own copy of a task's state.
-- Only five things in the app write to Linear: the inbox, when he decides a card; the day's plan, when he approves it in the morning or adds or takes out a side quest from the board; the board, when he drags a card to another column, which moves that issue to the column's state; the on-call review, when he applies it (priority, state and triage of on-call issues, and the on-call Main Quest); and Asked of me, when he presses Create card (a new TEMI issue).
+- Only five things in the app write to Linear: the inbox, when he decides a card; the day's plan, when he approves it in the morning or adds or takes out a side quest from the board; the board, when he drags a card to another column, which moves that issue to the column's state, or starts on a card in Todo (Play, or going to its agent or worktree), which moves it to In Progress; the on-call review, when he applies it (priority, state and triage of on-call issues, and the on-call Main Quest); and Asked of me, when he presses Create card (a new TEMI issue).
 
 ## Docs
 

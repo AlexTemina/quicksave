@@ -225,7 +225,7 @@ struct PieceCard: View {
                 QSHoverActions(visible: hovering) {
                     QSOpenLinkButton(url: piece.url)
                     OrcaButton(worktree: worktree, starting: store.startingAgents.contains(piece.id),
-                               onStart: { Task { await store.startAgent(piece) } }, onGo: { store.markSeen(agent) })
+                               onStart: { Task { await store.startAgent(piece) } }, onGo: { store.markSeen(agent); store.startWork(piece) })
                     if let agent { CloseAgentButton(agent: agent, store: store) }
                     if piece.isLoose {
                         if store.planWriting.contains(piece.id) { ProgressView().controlSize(.small) }
@@ -341,7 +341,8 @@ struct PieceDetail: View {
                     Spacer()
                     QSOpenLinkButton(url: piece.url)
                     OrcaButton(worktree: worktree, starting: store.startingAgents.contains(piece.id),
-                               onStart: { Task { await store.startAgent(piece) } }, onError: { orcaError = $0 })
+                               onStart: { Task { await store.startAgent(piece) } }, onError: { orcaError = $0 },
+                               onGo: { store.startWork(piece) })
                     if let agent = store.agentStates[piece.id] { CloseAgentButton(agent: agent, store: store) }
                 }
                 Text(piece.title).font(Theme.Text.heroTitle).fixedSize(horizontal: false, vertical: true)

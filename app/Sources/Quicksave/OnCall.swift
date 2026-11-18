@@ -729,9 +729,16 @@ extension Store {
         }
     }
 
+    /// A new review replaces the current one, chat included. While he is talking to the agent about a review he has
+    /// not applied yet, that would throw away what he asked (18-nov), so Review waits for Apply.
+    var onCallReviewLocked: Bool {
+        guard let r = onCall.review else { return false }
+        return !r.chat.isEmpty && r.items.contains { $0.open }
+    }
+
     /// Review on-call: the agent reads the board and Slack and proposes a card for each item. Nothing is written.
     func reviewOnCall() async {
-        guard !onCallBusy else { return }
+        guard !onCallBusy, !onCallReviewLocked else { return }
         onCallBusy = true
         onCallNotice = nil
         onCallStep = "Starting"

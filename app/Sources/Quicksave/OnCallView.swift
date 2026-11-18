@@ -50,8 +50,10 @@ struct OnCallView: View {
                 }
                 QSIconButton(systemImage: "arrow.clockwise", help: "Read Linear again", enabled: !store.loading) { Task { await store.refresh() } }
                 QSPrimaryButton(title: "Review on-call", icon: "list.bullet.clipboard", busy: store.onCallBusy && pending.isEmpty,
-                                enabled: !store.onCallBusy) { Task { await store.reviewOnCall() } }
-                    .help("An agent reads the on-call board and the Slack calls and proposes what to do with each card. Nothing is written until you apply.")
+                                enabled: !store.onCallBusy && !store.onCallReviewLocked) { Task { await store.reviewOnCall() } }
+                    .help(store.onCallReviewLocked
+                          ? "Apply the current review first: you are talking to its agent, and a new review would replace it, conversation included."
+                          : "An agent reads the on-call board and the Slack calls and proposes what to do with each card. Nothing is written until you apply.")
             }
             if let q = store.onCallQuest {
                 HStack(spacing: Theme.Space.s) {
