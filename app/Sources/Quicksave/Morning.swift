@@ -179,7 +179,7 @@ extension AgentJob {
             - why: why this goal, one line. discarded: what you left out and why, one line each.
             - meetings: today's meetings, one line each, like "10:00 Spain weekly".
             - failedSources: every source you could not read, said plainly. Empty if all worked.
-            - sideQuests: his other open issues that fit today next to the Main Quest, and only what fits. Work out the free time: his working day minus meetings minus what the Main Quest takes, and size each issue by its estimate or what it says. Every issue of his due today or overdue is a side quest, always, whether it fits or not, Pending for inputs included (16-nov): only the Main Quest's pieces are not. Size the rest around them. Rank by the 16-oct rule: something breaking now, then due today or overdue, then any date before no date and sooner first, then Linear priority, then size with small first. Never the Main Quest or its pieces, nothing labelled collectible, and beyond what is due, nothing in Pending for inputs. Each with id, title (a 2-3 word tag, without the code), url, and why in a few words (for example "due today, XS"). One of them is the medium slot (see the list above), with slot true.
+            - sideQuests: his other open issues that fit today next to the Main Quest, and only what fits. Work out the free time: his working day minus meetings minus what the Main Quest takes, and size each issue by its estimate or what it says. Every issue of his due today or overdue, and every one In Progress, In Review or Pending for inputs, is a side quest, always, whether it fits or not (16-nov, 18-nov): only the Main Quest's pieces are not. Size the rest around them. Rank by the 16-oct rule: something breaking now, then due today or overdue, then what someone is waiting on (kind Answer, Unblock or Review: a person is blocked until he acts, so it comes before his own work even with a later date), then any date before no date and sooner first, then Linear priority, then size with small first. Never the Main Quest or its pieces, nothing labelled collectible or of kind Read or Track, and beyond what is due or already started, nothing in Pending for inputs. Each with id, title (a 2-3 word tag, without the code), url, and why in a few words (for example "due today, XS"). One of them is the medium slot (see the list above), with slot true.
             - discarded: every issue of the window that is not a piece or a side quest, by its code with its tag, and the reason in a few words ("waiting on Elise", "due 14-nov, no time today"). Nothing of the window may be missing.
             - watch: from his projects' list above, only what he should look at today. Each with id, title (2-3 word tag), url, and why ("overdue 3 days, Rémi's", "blocked on review"). Empty if all is on track.
             """,
@@ -278,6 +278,34 @@ extension AgentJob {
             maxTurns: 4)
     }
 
+    /// Finds the game he typed, however loosely: one match, or up to three when the name is ambiguous. It has no tools.
+    static func typedGame(_ query: String, mood: String) -> AgentJob {
+        AgentJob(
+            name: "typed-game",
+            directory: NSTemporaryDirectory(),
+            prompt: """
+            Alejandro typed a videogame for today's standup simile: "\(query)". Find which game he means.
+
+            The day:
+            <<<
+            \(mood)
+            >>>
+
+            Rules:
+            - game: the full official title, e.g. "san andreas" is "Grand Theft Auto: San Andreas".
+            - One game when the name points to one. Up to three when it is ambiguous, the most likely first.
+            - link: the game's English Wikipedia page, https://en.wikipedia.org/wiki/<Title_with_underscores>. Use a page you are sure exists.
+            - simile: one or two sentences in English that tie the game to today, concrete enough that the team feels it. It follows "Feeling like playing <game>". No em-dashes.
+            """,
+            model: "claude-sonnet-5-5",
+            allowed: ["Read"],
+            denied: Morning.neverPost,
+            schema: """
+            {"type":"object","properties":{"games":{"type":"array","items":{"type":"object","properties":{"game":{"type":"string"},"link":{"type":"string"},"simile":{"type":"string"}},"required":["game","link","simile"]}}},"required":["games"]}
+            """,
+            maxTurns: 4)
+    }
+
     /// Writes today's standup with the game he chose. It reads Slack and Linear, and only returns text.
     static func standup(plan: String, comments: String, score: String, game: GameOption) -> AgentJob {
         AgentJob(
@@ -350,6 +378,7 @@ struct MorningView: View {
     @State private var chosen: GameOption?
     @State private var score = "3/5"
     @State private var showHistory = false
+    @State private var typedGame = ""
     /// After approving, the panel moves to the standup; this goes back to look at the plan.
     @State private var viewingPlan = false
 
@@ -529,11 +558,8 @@ struct MorningView: View {
                     .padding(Theme.Space.m)
                     .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(Theme.Palette.well))
             } else {
-                TextEditor(text: $store.morningComments)
-                    .font(Theme.Text.body)
-                    .scrollContentBackground(.hidden)
+                QSTextArea(text: $store.morningComments, minLines: 3, maxLines: 6)
                     .padding(Theme.Space.s)
-                    .frame(minHeight: 70, maxHeight: 110)
                     .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(Theme.Palette.well))
             }
             if store.morningPlan == nil {
@@ -710,6 +736,21 @@ struct MorningView: View {
             }
             if store.gamesLoading && store.gameOptions.isEmpty { working("Looking for games that fit today…") }
             ForEach(store.gameOptions) { option in gameCard(option) }
+            if !store.standupDone {
+                HStack(spacing: Theme.Space.s) {
+                    Image(systemName: "magnifyingglass").foregroundStyle(Theme.Palette.accent)
+                    TextField("Or type a game: san andreas, mario kart…", text: $typedGame)
+                        .textFieldStyle(.plain)
+                        .padding(Theme.Space.s)
+                        .background(RoundedRectangle(cornerRadius: Theme.Radius.s).fill(Theme.Palette.well))
+                        .disabled(store.gameSearching || store.standupWriting)
+                        .onSubmit { findTyped() }
+                    if store.gameSearching { ProgressView().controlSize(.small) }
+                    Button("Find") { findTyped() }
+                        .buttonStyle(QSHoverStyle()).foregroundStyle(Theme.Palette.accent)
+                        .disabled(store.gameSearching || store.standupWriting || typedGame.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
             HStack(spacing: Theme.Space.m) {
                 Button { Task { await store.loadGames() } } label: { Label("Five more", systemImage: "arrow.triangle.2.circlepath") }
                     .buttonStyle(QSHoverStyle()).disabled(store.gamesLoading || store.standupWriting)
@@ -734,8 +775,19 @@ struct MorningView: View {
         }
     }
 
+    private func findTyped() {
+        let text = typedGame.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !store.gameSearching else { return }
+        Task {
+            let found = await store.findGame(text)
+            if found.count == 1 { chosen = found[0] }
+            if !found.isEmpty { typedGame = "" }
+        }
+    }
+
     private func gameCard(_ option: GameOption) -> some View {
         let isChosen = chosen == option
+        let played = store.gameHistory.first { GameOption.key($0.game) == GameOption.key(option.game) }
         return Button { chosen = option } label: {
             HStack(alignment: .top, spacing: Theme.Space.m) {
                 Image(systemName: isChosen ? "checkmark.circle.fill" : "circle")
@@ -750,6 +802,7 @@ struct MorningView: View {
                     }
                     Text(option.simile).font(Theme.Text.body).foregroundStyle(Theme.Palette.textSecondary)
                         .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                    if let played { QSNote(text: "Played on \(QSDate.friendly(played.date))", icon: "exclamationmark.triangle", warning: true) }
                 }
                 Spacer(minLength: 0)
             }

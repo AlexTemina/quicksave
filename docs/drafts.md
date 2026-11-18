@@ -16,6 +16,7 @@ One section of the app where every draft lands, whichever part of the app produc
 - Where it came from: the inbox item or the feature that produced it, with its link.
 - When it was made.
 - Its state: open or archived.
+- A Slack draft is always kept in the form Slack's draft tool renders: `- ` lists with a blank line around each, whatever the agent wrote. Other lines keep the breaks they came with, so the standup's emoji lines stay one under the other (18-nov). Without it, the SFA reached Slack with every line glued to the one before (28-oct, 10-nov, 17-nov).
 
 ## What he does with it
 
@@ -28,7 +29,7 @@ One section of the app where every draft lands, whichever part of the app produc
 
 Each draft has a "Talk" button that opens a conversation with the agent under the text.
 
-- It is the shared AI conversation (see the design system): what the agent may touch on top, the conversation, what it is doing right now while it works, and a box where Return sends and Shift-Return adds a line (11-nov).
+- It is the shared AI conversation (see the design system): what the agent may touch on top, the conversation, what it is doing right now while it works, and a box where Return sends and Shift-Return or Control-Return adds a line (11-nov).
 - He writes what to change, or uses a quick button: Shorter, Less jargon, More direct.
 - When the draft keeps the session of the agent that wrote it (Tuesday's rituals), that same session continues, so it remembers everything it read and answers in seconds. Each turn forks the session, so the original is never touched and two drafts of the same batch can be talked over at once.
 - A draft without a session (older ones, the inbox's) starts a new agent with the conversation so far, which may read the item behind it. From its first answer on, that session continues.
@@ -48,6 +49,29 @@ The results panel after "Apply" shows what was done and what needs him. The draf
 - `where` is one word: Linear, Slack, GitHub, Mail or Other.
 - `note` is one line saying what to do with the text, for example "send only if he missed the weekly".
 - `text` is only what he pastes.
+
+## Linked to its card (built 18-nov)
+
+- Every draft says which card it belongs to (Main Quest piece, side quest, on-call card, or an open card with no issue): the header of its group, with the code and its tag. A click opens that card.
+- Every card shows how many drafts it has, and lists them in its detail. A click opens the draft.
+- Drafts stay in Drafts; the link goes both ways.
+
+## One draft per message, with its versions (built 18-nov)
+
+An agent that runs again for the same card used to leave a second copy of every draft: three on-call runs on ES-13220 (Cemex transfer) made six drafts for two messages.
+
+- A new draft for a message that already has an open draft becomes its next version, not a new draft. Its text becomes the draft's text, and the old text stays as an earlier version.
+- The agent decides first. The on-call card agents read the drafts still open for their issue and say which one they replace, or that theirs is a different message.
+- When the agent says nothing, a draft for the same card and the same place (Slack, Linear) replaces the newest open one.
+- Drafts from the same run never replace each other: two Slack messages written together stay two drafts.
+- The card says "updated 14:36" and shows v1, v2, v3 above the text, with "Show changes", without opening the conversation.
+- Archived drafts are never replaced: a draft written after he archived the last one is a new draft.
+
+## Grouped by card (built 18-nov)
+
+- Drafts are listed by the card they belong to, under a header with the code and its tag. A click opens the card.
+- Drafts with no card (the SFA, the rituals) share one group, Rituals.
+- The group with the newest draft comes first.
 
 ## Open
 

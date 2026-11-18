@@ -131,7 +131,8 @@ extension AgentJob {
                               "mcp__claude_ai_Notion__notion-fetch", "mcp__claude_ai_Notion__notion-search",
                               "mcp__claude_ai_Slack__slack_read_channel", "mcp__claude_ai_Slack__slack_read_thread",
                               "mcp__claude_ai_Slack__slack_search_public_and_private", "mcp__claude_ai_Slack__slack_search_channels",
-                              "mcp__claude_ai_Slack__slack_search_users"] + Morning.readLinear
+                              "mcp__claude_ai_Slack__slack_search_users",
+                              "mcp__claude_ai_Google_Calendar__list_events", "mcp__claude_ai_Google_Calendar__get_event"] + Morning.readLinear
     static let ritualNever = Morning.neverPost + ["mcp__claude_ai_Linear__save_status_update", "mcp__claude_ai_Linear__save_issue",
                                                   "mcp__claude_ai_Linear__save_project", "mcp__claude_ai_Linear__save_initiative",
                                                   "mcp__claude_ai_Slack__slack_send_message_draft", "Edit", "Write",
@@ -158,7 +159,7 @@ extension AgentJob {
             task = """
             Draft this week's initiative update of the Spain Product crew, from Quicksave: run Claude/commands/initiative-weekly.md with `dry-run`.
 
-            Roll it up from this week's project status updates as posted in Linear, and from Rémi's posted Concierge update if there is one (if it is missing, say so in notes). For a project whose update this week is not posted yet, use its draft below instead, and name it in notes so he posts it first.
+            Roll it up from this week's project status updates as posted in Linear, and from Rémi's posted Enrollment windows and Concierge updates (if one is missing, say so in notes). For a project whose update this week is not posted yet, use its draft below instead, and name it in notes so he posts it first.
 
             Project update drafts from Quicksave, as they read now:
             \(drafts.isEmpty ? "(none)" : drafts)
@@ -171,6 +172,15 @@ extension AgentJob {
             Differences: do not save it to Journal/ (another step archives it when he posts) and never post it.
             Return one draft: where "Slack", note "Weekly SFA", link the URL of #org_alaner-sfa found with the Slack channel search, text the SFA ready to paste.
             Do not draft the "Previously, on my SFA" thread reply: that is another step, once the SFA is posted.
+
+            Read before writing, every time, however complete his text is:
+            - The closing weekly contract in Linear (the issue with label `Weekly Contract` whose week ends today), and the new one if it exists.
+            - Every issue of his closed in Linear since last Wednesday, Alan teams and his own.
+            - The week's calendar (Google Calendar list_events, his work account), to catch work with no issue.
+            - His merged pull requests of the week (gh pr list).
+            Then: every issue the SFA mentions carries its Linear link, every person is a Slack mention `<@UXXXXXXXX|Name>` found with the Slack user search, and notes list what closed this week and is not in his text.
+
+            Line breaks, a hard rule: the text goes through Slack's draft tool, which reads standard markdown. Write every bullet as `- ` (a sub-bullet as four spaces and `- `), never `•` or `◦`. Put a blank line after the header, after every `:sunny:` title, after every list, around each separator, and between the fires and between the A+ lines. Write the separator as `\\-------------------------`. Without this, every line glues onto the one before it.
             """
         case .previously:
             task = """
@@ -199,6 +209,7 @@ extension AgentJob {
             \(task)
 
             What Alejandro wants in it, in his own words. It comes first: build the draft around it, and use what you read to complete and check it. If something you read contradicts it, keep his version and say so in notes.
+            No shortcuts: his text sets the content and the tone, it never replaces the sources. However complete it looks, read every source the task and its command name before writing, and check each claim against them. A draft built only from his text is a failed draft.
             <<<
             \(input.isEmpty ? "Nothing: draft it from what you read." : input)
             >>>
@@ -208,7 +219,8 @@ extension AgentJob {
             - English, no em-dashes, every code with a 2-3 word tag.
             - The Linear, Slack and Notion tools are deferred: find them first with ToolSearch, then call them.
             - In a shell, one simple command per call: no `cd`, no `&&`, no pipes.
-            - notes: only what he must know or act on (a missing update, a source that failed), one or two sentences, or empty.
+            - Every person named is a Slack mention in Slack drafts and an @name in Linear drafts; every issue named carries its link.
+            - notes: only what he must know or act on (a missing update, a source that failed, what closed and is not in his text), a few sentences, or empty. If a source failed, say which one: never skip it silently.
             """,
             model: "claude-sonnet-5-5",
             allowed: ritualReads,
@@ -323,18 +335,9 @@ struct TuesdayCard: View {
                     .padding(Theme.Space.m)
                     .textSelection(.enabled)
             } else {
-                TextEditor(text: Binding(get: { store.ritualInput[r] ?? "" }, set: { store.setRitualInput(r, $0) }))
-                    .font(Theme.Text.body)
-                    .scrollContentBackground(.hidden)
+                QSTextArea(text: Binding(get: { store.ritualInput[r] ?? "" }, set: { store.setRitualInput(r, $0) }),
+                           placeholder: r.hint, minLines: 3, maxLines: 7)
                     .padding(Theme.Space.s)
-                    .frame(minHeight: 60, maxHeight: 120)
-                    .overlay(alignment: .topLeading) {
-                        if text.isEmpty {
-                            Text(r.hint).font(Theme.Text.body).foregroundStyle(Theme.Palette.textTertiary)
-                                .padding(.horizontal, Theme.Space.s + 5).padding(.vertical, Theme.Space.s)
-                                .allowsHitTesting(false)
-                        }
-                    }
             }
         }
         .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(Theme.Palette.well))

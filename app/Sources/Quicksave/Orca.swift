@@ -61,14 +61,15 @@ enum Orca {
     static func startAgent(in folder: String, title: String, prompt: String) async throws {
         NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications/Orca.app"))
         struct Env: Decodable { struct R: Decodable { struct T: Decodable { let handle: String }; let terminal: T }; let result: R }
-        let created = try await run(["terminal", "create", "--worktree", "path:\(folder)", "--command", "claude --permission-mode auto",
+        // The session is named at launch: Claude retitles its tab from it. A "/rename" typed just before the prompt
+        // got glued to it, so the whole prompt became the name and the agent never ran it (18-nov).
+        let quoted = "'" + title.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let created = try await run(["terminal", "create", "--worktree", "path:\(folder)", "--command", "claude --permission-mode auto --name \(quoted)",
                                      "--title", title, "--focus", "--json"])
         guard let handle = (try? JSONDecoder().decode(Env.self, from: created))?.result.terminal.handle else {
             throw QuicksaveError.message("Orca did not open the agent's terminal.")
         }
         _ = try? await run(["terminal", "wait", "--terminal", handle, "--for", "tui-idle", "--timeout-ms", "120000", "--json"])
-        // Claude retitles its tab from the session name, so the session itself is named after the issue too.
-        _ = try? await run(["terminal", "send", "--terminal", handle, "--text", "/rename \(title)", "--enter", "--json"])
         _ = try? await run(["terminal", "send", "--terminal", handle, "--text", prompt, "--enter", "--json"])
         _ = try? await run(["terminal", "rename", "--terminal", handle, "--title", title, "--json"])
     }
@@ -160,6 +161,11 @@ enum Orca {
         if r.status == 0 { return r.out }
         let problem = String(data: r.err, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         var message = problem.isEmpty ? (String(data: r.out, encoding: .utf8) ?? "") : problem
+        // Orca answers in JSON; only its message is for a person ("Timed out waiting for the Orca runtime to respond").
+        for data in [r.out, r.err] {
+            if let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let said = (obj["error"] as? [String: Any])?["message"] as? String { message = said; break }
+        }
         if message.count > 300 { message = String(message.prefix(300)) + "…" }
         throw QuicksaveError.message(message.isEmpty ? "orca \(args.prefix(2).joined(separator: " ")) failed" : message)
     }
@@ -180,6 +186,13 @@ enum Orca {
         var isMain = false
         /// Where it runs, as a person reads it: "vault main", "alan-apps · ES-12986-mo-mobile-prs".
         var place: String { isMain ? repo + " main" : repo + " · " + worktreeName }
+
+        /// Which reply this is: its last message, fingerprinted so it stays the same across launches.
+        var replyID: String {
+            var h: UInt64 = 1469598103934665603
+            for b in lastMessage.utf8 { h = (h ^ UInt64(b)) &* 1099511628211 }
+            return String(h, radix: 16)
+        }
 
         /// Tells two live agents apart.
         var key: String { worktreeId + "|" + (terminal ?? name) }
@@ -303,6 +316,8 @@ enum Orca {
             var seen = Set<String>()
             while let c = cur {
                 if (c["displayName"] as? String) == Reviews.parentName { return true }
+                // The on-call shift's worktrees live in the On-call tab.
+                if (c["displayName"] as? String ?? "").hasPrefix(OnCall.parentPrefix) { return true }
                 guard let p = c["parentWorktreeId"] as? String, seen.insert(p).inserted else { return false }
                 cur = byId[p]
             }

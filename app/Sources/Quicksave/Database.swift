@@ -40,6 +40,8 @@ final class Database {
             // The session of the agent that wrote it and the folder it ran in, so talking about the draft continues it.
             sqlite3_exec(db, "ALTER TABLE drafts ADD COLUMN session TEXT", nil, nil, nil)
             sqlite3_exec(db, "ALTER TABLE drafts ADD COLUMN session_dir TEXT", nil, nil, nil)
+            // When an agent last left a new version of the draft, instead of a second draft. See docs/drafts.md.
+            sqlite3_exec(db, "ALTER TABLE drafts ADD COLUMN updated REAL", nil, nil, nil)
             // The conversation about each draft: his messages, the agent's answers, and every version of the text.
             sqlite3_exec(db, """
                 CREATE TABLE IF NOT EXISTS draft_turns (
@@ -117,21 +119,114 @@ final class Database {
         sqlite3_step(stmt)
     }
 
+    /// One draft as an agent hands it over, before it is saved.
+    struct NewDraft {
+        var place: String
+        var note: String
+        var link: String?
+        var body: String
+        var source: String?
+        var item: String?
+        var session: String? = nil
+        var sessionDir: String? = nil
+        var replaces: DraftReplace = .auto
+    }
+
+    /// Whether a draft is a new version of one already open. The agent says so when it can; otherwise a draft for the
+    /// same card and the same place replaces the newest open one.
+    enum DraftReplace: Equatable { case auto, new, draft(Int64) }
+
     func addDraft(place: String, note: String, link: String?, body: String, source: String?, item: String?,
                   session: String? = nil, sessionDir: String? = nil) {
+        addDrafts([NewDraft(place: place, note: note, link: link, body: body, source: source, item: item,
+                            session: session, sessionDir: sessionDir)])
+    }
+
+    /// Saves what one agent run left. A draft that replaces an open one becomes its next version; drafts of the same
+    /// run never replace each other. Returns how many were new and how many were new versions.
+    @discardableResult
+    func addDrafts(_ list: [NewDraft]) -> (added: Int, updated: Int) {
+        var touched: Set<Int64> = []
+        var added = 0, updated = 0
+        for d in list {
+            if let target = replaceTarget(d, excluding: touched) {
+                addVersion(target, d)
+                touched.insert(target)
+                updated += 1
+            } else if let id = insertDraft(d) {
+                touched.insert(id)
+                added += 1
+            }
+        }
+        return (added, updated)
+    }
+
+    private func replaceTarget(_ d: NewDraft, excluding: Set<Int64>) -> Int64? {
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
-        guard sqlite3_prepare_v2(db, "INSERT INTO drafts (place, link, body, source, created, note, item, session, session_dir) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", -1, &stmt, nil) == SQLITE_OK else { return }
-        if let session { sqlite3_bind_text(stmt, 8, session, -1, Self.transient) } else { sqlite3_bind_null(stmt, 8) }
-        if let sessionDir { sqlite3_bind_text(stmt, 9, sessionDir, -1, Self.transient) } else { sqlite3_bind_null(stmt, 9) }
-        if let item { sqlite3_bind_text(stmt, 7, item, -1, Self.transient) } else { sqlite3_bind_null(stmt, 7) }
-        sqlite3_bind_text(stmt, 1, place, -1, Self.transient)
-        if let link { sqlite3_bind_text(stmt, 2, link, -1, Self.transient) } else { sqlite3_bind_null(stmt, 2) }
-        sqlite3_bind_text(stmt, 3, body, -1, Self.transient)
-        if let source { sqlite3_bind_text(stmt, 4, source, -1, Self.transient) } else { sqlite3_bind_null(stmt, 4) }
+        switch d.replaces {
+        case .new: return nil
+        case .draft(let id):
+            guard sqlite3_prepare_v2(db, "SELECT id FROM drafts WHERE id = ? AND archived = 0", -1, &stmt, nil) == SQLITE_OK else { return nil }
+            sqlite3_bind_int64(stmt, 1, id)
+            if sqlite3_step(stmt) == SQLITE_ROW, !excluding.contains(id) { return id }
+            return nil
+        case .auto:
+            guard let item = d.item, !item.isEmpty else { return nil }
+            let sql = "SELECT id FROM drafts WHERE archived = 0 AND item = ? AND place = ? ORDER BY COALESCE(updated, created) DESC"
+            guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return nil }
+            sqlite3_bind_text(stmt, 1, item, -1, Self.transient)
+            sqlite3_bind_text(stmt, 2, d.place, -1, Self.transient)
+            while sqlite3_step(stmt) == SQLITE_ROW {
+                let id = sqlite3_column_int64(stmt, 0)
+                if !excluding.contains(id) { return id }
+            }
+            return nil
+        }
+    }
+
+    private func insertDraft(_ d: NewDraft) -> Int64? {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "INSERT INTO drafts (place, link, body, source, created, note, item, session, session_dir) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", -1, &stmt, nil) == SQLITE_OK else { return nil }
+        func bind(_ i: Int32, _ v: String?) { if let v { sqlite3_bind_text(stmt, i, v, -1, Self.transient) } else { sqlite3_bind_null(stmt, i) } }
+        bind(1, d.place); bind(2, d.link); bind(3, d.body); bind(4, d.source)
         sqlite3_bind_double(stmt, 5, Date().timeIntervalSince1970)
-        sqlite3_bind_text(stmt, 6, note, -1, Self.transient)
-        sqlite3_step(stmt)
+        bind(6, d.note); bind(7, d.item); bind(8, d.session); bind(9, d.sessionDir)
+        guard sqlite3_step(stmt) == SQLITE_DONE else { return nil }
+        return sqlite3_last_insert_rowid(db)
+    }
+
+    /// The agent's new text becomes the draft's text, and the old one stays as an earlier version.
+    private func addVersion(_ id: Int64, _ d: NewDraft) {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "SELECT body, created FROM drafts WHERE id = ?", -1, &stmt, nil) == SQLITE_OK else { return }
+        sqlite3_bind_int64(stmt, 1, id)
+        guard sqlite3_step(stmt) == SQLITE_ROW else { return }
+        let old = sqlite3_column_text(stmt, 0).map { String(cString: $0) } ?? ""
+        let oldCreated = sqlite3_column_double(stmt, 1)
+        if !hasVersions(id) { addDraftTurn(id, who: .original, text: "First draft", body: old, at: Date(timeIntervalSince1970: oldCreated)) }
+        guard old != d.body else { return }
+        addDraftTurn(id, who: .update, text: "New version from \(d.source ?? "an agent")", body: d.body)
+        var up: OpaquePointer?
+        defer { sqlite3_finalize(up) }
+        let sql = "UPDATE drafts SET body = ?, note = ?, link = COALESCE(?, link), drafted = 0, updated = ?, session = COALESCE(?, session), session_dir = COALESCE(?, session_dir) WHERE id = ?"
+        guard sqlite3_prepare_v2(db, sql, -1, &up, nil) == SQLITE_OK else { return }
+        func bind(_ i: Int32, _ v: String?) { if let v { sqlite3_bind_text(up, i, v, -1, Self.transient) } else { sqlite3_bind_null(up, i) } }
+        bind(1, d.body); bind(2, d.note); bind(3, d.link)
+        sqlite3_bind_double(up, 4, Date().timeIntervalSince1970)
+        bind(5, d.session); bind(6, d.sessionDir)
+        sqlite3_bind_int64(up, 7, id)
+        sqlite3_step(up)
+    }
+
+    private func hasVersions(_ id: Int64) -> Bool {
+        var stmt: OpaquePointer?
+        defer { sqlite3_finalize(stmt) }
+        guard sqlite3_prepare_v2(db, "SELECT 1 FROM draft_turns WHERE draft_id = ? AND body IS NOT NULL LIMIT 1", -1, &stmt, nil) == SQLITE_OK else { return false }
+        sqlite3_bind_int64(stmt, 1, id)
+        return sqlite3_step(stmt) == SQLITE_ROW
     }
 
     /// Open drafts, or the archived ones, newest first.
@@ -139,7 +234,7 @@ final class Database {
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
         var out: [DraftItem] = []
-        let sql = "SELECT id, place, link, body, source, created, note, drafted, item, session, session_dir FROM drafts WHERE archived = ? ORDER BY created DESC"
+        let sql = "SELECT id, place, link, body, source, created, note, drafted, item, session, session_dir, updated FROM drafts WHERE archived = ? ORDER BY COALESCE(updated, created) DESC"
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return out }
         sqlite3_bind_int(stmt, 1, archived ? 1 : 0)
         func text(_ i: Int32) -> String? { sqlite3_column_text(stmt, i).map { String(cString: $0) } }
@@ -148,7 +243,8 @@ final class Database {
                                  link: text(2).flatMap(URL.init), body: text(3) ?? "", source: text(4) ?? "",
                                  created: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 5)),
                                  drafted: sqlite3_column_int(stmt, 7) == 1, item: text(8) ?? "",
-                                 session: text(9), sessionDir: text(10)))
+                                 session: text(9), sessionDir: text(10),
+                                 updated: sqlite3_column_type(stmt, 11) == SQLITE_NULL ? nil : Date(timeIntervalSince1970: sqlite3_column_double(stmt, 11))))
         }
         return out
     }
@@ -184,7 +280,7 @@ final class Database {
         sqlite3_step(stmt)
     }
 
-    func addDraftTurn(_ draft: Int64, who: DraftTurn.Who, text: String, body: String?) {
+    func addDraftTurn(_ draft: Int64, who: DraftTurn.Who, text: String, body: String?, at: Date = Date()) {
         var stmt: OpaquePointer?
         defer { sqlite3_finalize(stmt) }
         guard sqlite3_prepare_v2(db, "INSERT INTO draft_turns (draft_id, who, text, body, created) VALUES (?, ?, ?, ?, ?)", -1, &stmt, nil) == SQLITE_OK else { return }
@@ -192,7 +288,7 @@ final class Database {
         sqlite3_bind_text(stmt, 2, who.rawValue, -1, Self.transient)
         sqlite3_bind_text(stmt, 3, text, -1, Self.transient)
         if let body { sqlite3_bind_text(stmt, 4, body, -1, Self.transient) } else { sqlite3_bind_null(stmt, 4) }
-        sqlite3_bind_double(stmt, 5, Date().timeIntervalSince1970)
+        sqlite3_bind_double(stmt, 5, at.timeIntervalSince1970)
         sqlite3_step(stmt)
     }
 

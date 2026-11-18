@@ -69,11 +69,23 @@ struct Piece: Identifiable {
     /// is out of sight. The worktrees it is open in.
     var openIn: [Orca.OpenWorktree] = []
     var isLoose: Bool { !openIn.isEmpty }
+    /// A card of the on-call board: Start opens its worktree under the shift's parent, not /start-task.
+    var onCall = false
+    /// Linear's priority, by name, for the on-call bands.
+    var priority: String? = nil
+    /// What it asks of him and where it comes from (see Kind.swift).
+    var kind: CardKind? = nil
+    var origin: CardOrigin = .linear
 
     static func from(_ p: LinearIssue, order: Int, tag: String, step: String, isSide: Bool = false) -> Piece {
         Piece(id: p.identifier, title: p.title, stateName: p.state.name, description: MainQuest.clean(p.description ?? ""),
               pullRequests: PullRequest.from(p), tag: tag.isEmpty ? p.title : tag, step: step, qa: MainQuest.qa(p.description),
-              url: URL(string: p.url), column: Column.of(p.state), order: order, dueDate: p.dueDate, isSide: isSide)
+              url: URL(string: p.url), column: Column.of(p.state), order: order, dueDate: p.dueDate, isSide: isSide,
+              kind: kind(p), origin: CardOrigin.of(description: ([p.description ?? ""] + (p.attachments?.nodes.map(\.url) ?? [])).joined(separator: "\n"), kind: kind(p)))
+    }
+
+    private static func kind(_ p: LinearIssue) -> CardKind? {
+        CardKind.of(labels: p.labelNames, title: p.title, identifier: p.identifier)
     }
 }
 

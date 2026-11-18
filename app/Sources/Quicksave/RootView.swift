@@ -9,6 +9,8 @@ struct RootView: View {
         Group {
             switch store.tab {
             case .today: BoardView(store: store)
+            case .oncall: OnCallView(store: store)
+            case .asks: AsksView(store: store)
             case .inbox: InboxView(store: store)
             case .reviews: ReviewsView(store: store)
             case .drafts: DraftsView(store: store)
@@ -24,6 +26,9 @@ struct RootView: View {
             ToolbarItem(placement: .principal) {
                 QSTabBar(items: [
                     .init(tab: .today, title: "Today", new: store.newCount(.today)),
+                ] + (store.showOnCall ? [.init(tab: .oncall, title: "On-call", count: store.onCallCards.filter { $0.column != .done }.count,
+                                               new: store.newCount(.oncall))] : []) + [
+                    .init(tab: .asks, title: "Asked of me", count: store.waitingAsks.count, new: store.newCount(.asks)),
                     .init(tab: .inbox, title: "Inbox", count: store.pendingCards.count, new: store.newCount(.inbox)),
                     .init(tab: .reviews, title: "Reviews", count: store.reviewRequests.count, new: store.newCount(.reviews)),
                     .init(tab: .drafts, title: "Drafts", count: store.drafts.count, new: store.newCount(.drafts)),

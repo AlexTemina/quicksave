@@ -18,11 +18,13 @@ struct DraftItem: Identifiable, Hashable {
     /// The session of the agent that wrote it, and the folder it ran in, to talk about it with that same agent.
     var session: String? = nil
     var sessionDir: String? = nil
+    /// When an agent last replaced its text with a new version.
+    var updated: Date? = nil
 }
 
 /// One turn of the conversation about a draft. A turn with a body is a version of the text.
 struct DraftTurn: Identifiable, Hashable {
-    enum Who: String { case original, me, agent, hand, back }
+    enum Who: String { case original, me, agent, hand, back, update }
     let id: Int64
     let who: Who
     let text: String
@@ -38,6 +40,40 @@ struct DraftPreview: View {
 
     var body: some View {
         if place == "Slack" { SlackPreview(text: text) } else { MarkdownBlock(text).font(Theme.Text.body) }
+    }
+}
+
+/// Slack's draft tool reads standard markdown, not Slack's own text: a `•` line is not a list, and a line with no blank
+/// line before it glues onto the previous one. The SFA came out glued on 28-oct, 10-nov and 17-nov, so a Slack draft is
+/// rewritten into the form that renders: `- ` lists (four spaces for a sub-bullet), a blank line around every list,
+/// and the long dash separator escaped so it is not read as a rule. Other lines keep the breaks they came with: a blank
+/// line between every one split the standup's emoji lines apart (18-nov).
+enum SlackDraftText {
+    static func normalized(_ text: String) -> String {
+        var out: [String] = []
+        var lastWasItem = false
+        var inCode = false
+        var blankBefore = false
+        for raw in text.components(separatedBy: "\n") {
+            var line = raw.replacingOccurrences(of: "\t", with: "    ")
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("```") { inCode.toggle(); out.append(line); lastWasItem = false; continue }
+            if inCode { out.append(line); continue }
+            if trimmed.isEmpty { blankBefore = true; continue }
+            let indented = line.first == " "
+            if trimmed.hasPrefix("• ") { line = (indented ? "    - " : "- ") + trimmed.dropFirst(2) }
+            else if trimmed.hasPrefix("◦ ") { line = "    - " + trimmed.dropFirst(2) }
+            else if trimmed.range(of: #"^-{5,}$"#, options: .regularExpression) != nil { line = "\\" + trimmed }
+            let t = line.trimmingCharacters(in: .whitespaces)
+            let isItem = (t.hasPrefix("- ") || (t.hasPrefix("* ") && !t.hasPrefix("**")))
+                || t.range(of: #"^\d+\.\s"#, options: .regularExpression) != nil
+            // A list starts and ends with a blank line; its items stay together; other lines keep their own breaks.
+            if !out.isEmpty, out.last != "", blankBefore || isItem != lastWasItem { out.append("") }
+            out.append(line)
+            lastWasItem = isItem
+            blankBefore = false
+        }
+        return out.joined(separator: "\n")
     }
 }
 
@@ -104,6 +140,17 @@ struct DraftsView: View {
     @State private var showChanges: Set<Int64> = []
 
     private var list: [DraftItem] { showArchived ? store.archivedDrafts : store.drafts }
+    /// The draft a card asked to show, outlined for a moment.
+    @State private var flash: Int64?
+
+    private func focus(_ proxy: ScrollViewProxy) {
+        guard let id = store.focusDraft else { return }
+        store.focusDraft = nil
+        if showArchived { showArchived = false }
+        flash = id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { withAnimation { proxy.scrollTo(id, anchor: .top) } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { withAnimation { if flash == id { flash = nil } } }
+    }
 
     var body: some View {
         VStack(spacing: Theme.Space.l) {
@@ -115,13 +162,27 @@ struct DraftsView: View {
                              subtitle: showArchived ? nil : "Text the agents leave for you to post will show up here.")
                     .frame(maxHeight: .infinity, alignment: .top)
             } else {
-                ScrollView {
-                    LazyVStack(spacing: Theme.Space.m) {
-                        ForEach(list) { draft in card(draft) }
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        // A plain stack: a lazy one kept measuring cards of changing height and froze the app (18-nov).
+                        VStack(alignment: .leading, spacing: Theme.Space.l) {
+                            ForEach(groups, id: \.key) { group in
+                                VStack(alignment: .leading, spacing: Theme.Space.s) {
+                                    groupHeader(group.key, count: group.drafts.count)
+                                    ForEach(group.drafts) { draft in
+                                        card(draft).id(draft.id)
+                                            .overlay(RoundedRectangle(cornerRadius: Theme.Radius.m)
+                                                .strokeBorder(Theme.Palette.accent, lineWidth: 2).opacity(flash == draft.id ? 1 : 0))
+                                    }
+                                }
+                            }
+                        }
+                        .padding(.vertical, Theme.Space.xs)
                     }
-                    .padding(.vertical, Theme.Space.xs)
+                    .scrollBounceBehavior(.basedOnSize)
+                    .onAppear { focus(proxy) }
+                    .onChange(of: store.focusDraft) { focus(proxy) }
                 }
-                .scrollBounceBehavior(.basedOnSize)
             }
             if !selected.isEmpty { selectionBar }
         }
@@ -132,6 +193,35 @@ struct DraftsView: View {
         .background(QSWindowBackground().ignoresSafeArea())
         .onChange(of: showArchived) { selected = [] }
         .onAppear { store.loadDrafts() }
+    }
+
+    /// The drafts by the card they belong to, the group with the newest draft first. Drafts with no card (the
+    /// rituals) share one group.
+    private var groups: [(key: String, drafts: [DraftItem])] {
+        var order: [String] = []
+        var byKey: [String: [DraftItem]] = [:]
+        for d in list {
+            if byKey[d.item] == nil { order.append(d.item) }
+            byKey[d.item, default: []].append(d)
+        }
+        return order.map { ($0, byKey[$0]!) }
+    }
+
+    @ViewBuilder private func groupHeader(_ item: String, count: Int) -> some View {
+        HStack(spacing: Theme.Space.s) {
+            if item.isEmpty {
+                Text("Rituals").font(Theme.Text.cardTitle)
+            } else {
+                let tag = store.card(item)?.tag
+                Button { store.openCard(item) } label: {
+                    Text(tag.map { "\(item) (\($0))" } ?? item).font(Theme.Text.cardTitle)
+                }
+                .buttonStyle(QSHoverStyle())
+                .help(tag != nil ? "Open its card" : "Not on the board: open it in Linear")
+            }
+            Text("\(count)").font(Theme.Text.number).foregroundStyle(Theme.Palette.textTertiary)
+            Spacer()
+        }
     }
 
     private var header: some View {
@@ -166,13 +256,11 @@ struct DraftsView: View {
         (store.draftTurns[draft.id] ?? []).filter { $0.body != nil }.enumerated().map { ($0.offset + 1, $0.element) }
     }
 
-    /// The conversation with the agent about one draft: his messages, its answers, and the versions it left.
-    private func thread(_ draft: DraftItem) -> some View {
+    /// v1, v2, v3 of the text: the first draft, the agents' new versions, his rewrites and hand edits.
+    @ViewBuilder private func versionsRow(_ draft: DraftItem) -> some View {
         let vs = versions(draft)
-        let busy = store.talkingIds.contains(draft.id)
         let current = vs.last(where: { $0.turn.body == draft.body })?.number
-        return VStack(alignment: .leading, spacing: Theme.Space.s) {
-            if vs.count > 1 {
+        if vs.count > 1 {
                 HStack(spacing: Theme.Space.xs) {
                     ForEach(vs, id: \.turn.id) { v in
                         Button("v\(v.number)") { if v.number != current { store.restoreVersion(draft, body: v.turn.body!, number: v.number) } }
@@ -187,6 +275,12 @@ struct DraftsView: View {
                         .toggleStyle(.checkbox).font(Theme.Text.meta)
                 }
             }
+    }
+
+    /// The conversation with the agent about one draft: his messages, its answers, and the versions it left.
+    private func thread(_ draft: DraftItem) -> some View {
+        let busy = store.talkingIds.contains(draft.id)
+        return VStack(alignment: .leading, spacing: Theme.Space.s) {
             QSConversation(
                 purpose: "Rewrites this draft with you. It may read where the draft came from; nothing leaves Quicksave.",
                 turns: conversationTurns(draft),
@@ -213,7 +307,7 @@ struct DraftsView: View {
             case .agent:
                 guard let body = t.body else { return QSConversationTurn(id: t.id, who: .question, text: t.text) }
                 return QSConversationTurn(id: t.id, who: .ai, text: t.text, proposal: body, label: numbers[t.id].map { "v\($0)" })
-            case .hand, .back:
+            case .hand, .back, .update:
                 return QSConversationTurn(id: t.id, who: .event, text: t.text + (numbers[t.id].map { " (v\($0))" } ?? ""))
             }
         }
@@ -264,7 +358,9 @@ struct DraftsView: View {
             VStack(alignment: .leading, spacing: Theme.Space.s) {
                 HStack(spacing: Theme.Space.s) {
                     QSTag(text: draft.place, icon: "paperplane", color: Theme.Palette.accent)
-                    Text(QSDate.ago(draft.created)).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textTertiary)
+                    Text(draft.updated.map { "updated " + QSDate.ago($0) } ?? QSDate.ago(draft.created))
+                        .font(Theme.Text.meta).foregroundStyle(Theme.Palette.textTertiary)
+                        .help("Written " + QSDate.ago(draft.created))
                     Spacer()
                     if draft.place == "Slack" {
                         if store.draftingIds.contains(draft.id) {
@@ -304,6 +400,7 @@ struct DraftsView: View {
                 if !draft.note.isEmpty {
                     Text(draft.note).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
                 }
+                versionsRow(draft)
                 if editingId == draft.id {
                     Picker("", selection: $previewing) {
                         Text("Edit").tag(false)
@@ -316,11 +413,8 @@ struct DraftsView: View {
                             .frame(maxWidth: .infinity, minHeight: Theme.Size.editorMinHeight, alignment: .topLeading)
                             .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(Theme.Palette.well))
                     } else {
-                        TextEditor(text: $editText)
-                            .font(Theme.Text.body)
-                            .scrollContentBackground(.hidden)
+                        QSTextArea(text: $editText, minLines: 8, maxLines: 30)
                             .padding(Theme.Space.s)
-                            .frame(minHeight: Theme.Size.editorMinHeight)
                             .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(Theme.Palette.well))
                     }
                     HStack(spacing: Theme.Space.m) {

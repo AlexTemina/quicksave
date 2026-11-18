@@ -46,6 +46,27 @@ enum Theme {
         static let prMerged = Color(hex: "#8b5cf6")
         static let prClosed = Color(hex: "#a87b6a")
         static let prFailing = Color(hex: "#eb5757")
+        /// Each card kind in the color of its label in Linear. The tag sits apart, at the card's bottom right, so it
+        /// does not mix with the pull request and reply colors at the top.
+        static func kind(_ k: CardKind) -> Color {
+            switch k {
+            case .answer: return Color(hex: "#eb5757")
+            case .unblock: return Color(hex: "#f2994a")
+            case .review: return Color(hex: "#9b51e0")
+            case .decide: return Color(hex: "#d4a72c")
+            case .ask: return Color(hex: "#4ea7fc")
+            case .chase: return Color(hex: "#26b5ce")
+            case .build: return Color(hex: "#4cb782")
+            case .fix: return Color(hex: "#e5484d")
+            case .write: return Color(hex: "#0f7488")
+            case .prepare: return Color(hex: "#b8962e")
+            case .interview: return Color(hex: "#c2185b")
+            case .people: return Color(hex: "#e07a6c")
+            case .admin: return Color(hex: "#95a2b3")
+            case .read: return Color(hex: "#5e9ee6")
+            case .track: return Color(hex: "#8a8f98")
+            }
+        }
         /// The inbox's four decisions, plus leaving a card for later.
         static let onAccent = Color.white
         static let decisionAccept = prOpen

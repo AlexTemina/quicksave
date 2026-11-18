@@ -3,8 +3,8 @@ import Foundation
 /// What the morning must look at, decided by the app from Linear and handed to the plan, so nothing open is left out
 /// in silence (10-nov: three overdue issues in progress were neither planned nor discarded). See docs/morning.md.
 struct DayWindow {
-    /// His issues the plan must place: due before the end of Alan's week or overdue, urgent or high, or in progress or
-    /// in review. Each one ends up as a piece, a side quest, or left out with a reason.
+    /// His issues the plan must place: due before the end of Alan's week or overdue, urgent or high, or in progress,
+    /// in review or pending for inputs. Each one ends up as a piece, a side quest, or left out with a reason.
     var mine: [Linear.WorkIssue] = []
     /// Medium, low or no-priority issues of his outside the window, untouched for longest first. One becomes a side
     /// quest every day, so the middle of the pile moves too.
@@ -27,13 +27,24 @@ struct DayWindow {
 
     /// Labels whose issues live elsewhere: the Main Quest itself, and the reading list.
     static func skipped(_ i: Linear.WorkIssue) -> Bool {
-        i.labelNames.contains("Main Quest") || i.labelNames.contains("collectible")
+        if i.labelNames.contains("Main Quest") || i.labelNames.contains("collectible") { return true }
+        // Read goes to collectibles and Track has nothing to do: neither takes a place in the day.
+        let kind = CardKind.of(labels: i.labelNames, title: i.title, identifier: i.identifier)
+        return kind == .read || kind == .track
     }
 
     static func inWindow(_ i: Linear.WorkIssue, end: String) -> Bool {
         if let due = i.dueDate, due <= end { return true }
         if [1, 2].contains(i.priority ?? 0) { return true }
-        return ["In Progress", "In Review"].contains(i.state.name)
+        return forcedStates.contains(i.state.name)
+    }
+
+    /// States whose issues are always in the day, whether they fit or not (18-nov).
+    static let forcedStates = ["In Progress", "In Review", "Pending for inputs"]
+
+    /// Always in the day: due today or before, or in progress, in review or pending for inputs (18-nov).
+    static func forced(_ i: Linear.WorkIssue, today: String) -> Bool {
+        (i.dueDate ?? "9999") <= today || forcedStates.contains(i.state.name)
     }
 
     static func load(key: String) async -> DayWindow {
@@ -65,6 +76,9 @@ struct DayWindow {
 
     static func line(_ i: Linear.WorkIssue, withAssignee: Bool = false) -> String {
         var parts = ["\(i.identifier) \"\(i.title)\"", i.state.name, "due " + (i.dueDate ?? "none"), i.priorityName]
+        if let k = CardKind.of(labels: i.labelNames, title: i.title, identifier: i.identifier) {
+            parts.append("kind " + k.rawValue + (k.someoneWaits ? " (someone waits)" : ""))
+        }
         if let p = i.project?.name { parts.append("project " + p) }
         if withAssignee { parts.append("assigned to " + (i.assignee?.name ?? "nobody")) }
         return "- " + parts.joined(separator: ", ") + " (" + i.url + ")"
@@ -76,7 +90,7 @@ struct DayWindow {
         var out = """
         What Quicksave read from Linear for you. Alan's week ends on \(end). Use these lists as they are; you may still read any issue for detail.
 
-        1. The window: every open issue of his that is overdue or due by \(end), urgent or high, or in progress or in review. Every one of them must appear in your answer, by its code: as a piece, as a side quest, or in `discarded` with its reason. Overdue ones come first. None may be missing.
+        1. The window: every open issue of his that is overdue or due by \(end), urgent or high, or in progress, in review or pending for inputs. Every one of them must appear in your answer, by its code: as a piece, as a side quest, or in `discarded` with its reason. Overdue ones come first. None may be missing.
         \(mine.isEmpty ? "- (none)" : mine.map { Self.line($0) }.joined(separator: "\n"))
 
         2. The medium slot: one side quest a day comes from the middle of the pile, so it moves too. Pick the first of these unless it cannot be done today (then the next, and say why), and mark it with `slot: true`. Its why says how long it has waited.
@@ -92,14 +106,14 @@ struct DayWindow {
         return out
     }
 
-    /// Codes of the window the plan did not place anywhere.
-    /// His issues due today or before. They are always side quests, whether they fit or not (16-nov).
+    /// His issues that are always in the day, whether they fit or not: due today or before (16-nov), or in progress,
+    /// in review or pending for inputs (18-nov).
     var dueByToday: [Linear.WorkIssue] {
         let today = Morning.today
-        return mine.filter { ($0.dueDate ?? "9999") <= today }
+        return mine.filter { Self.forced($0, today: today) }
     }
 
-    /// The plan with every issue due today or before as a side quest, whatever the agent decided. Pieces stay pieces.
+    /// The plan with every forced issue as a side quest, whatever the agent decided. Pieces stay pieces.
     func forcingDue(_ plan: MorningPlan) -> MorningPlan {
         var p = plan
         let pieces = Set(p.pieces.compactMap(\.id))
@@ -112,7 +126,7 @@ struct DayWindow {
         let firstLater = sides.firstIndex { s in !dueByToday.contains { $0.identifier == s.id } } ?? sides.count
         sides.insert(contentsOf: added.map { i in
             MorningPlan.Side(id: i.identifier, title: i.title, url: i.url,
-                             why: (i.dueDate == today ? "due today" : "overdue since \(QSDate.friendly(i.dueDate ?? today))") + ", \(i.state.name)")
+                             why: Self.forcedWhy(i, today: today))
         }, at: firstLater)
         p.sideQuests = sides
         let ids = Set(added.map(\.identifier))
@@ -120,6 +134,12 @@ struct DayWindow {
         return p
     }
 
+    static func forcedWhy(_ i: Linear.WorkIssue, today: String) -> String {
+        guard let due = i.dueDate, due <= today else { return i.state.name.lowercased() }
+        return (due == today ? "due today" : "overdue since \(QSDate.friendly(due))") + ", \(i.state.name)"
+    }
+
+    /// Codes of the window the plan did not place anywhere.
     func missing(from plan: MorningPlan) -> [Linear.WorkIssue] {
         let text = ([plan.goal] + plan.pieces.compactMap(\.id) + (plan.sideQuests ?? []).map(\.id)
                     + plan.discarded.map { $0.what + " " + $0.why } + [plan.existing ?? ""]).joined(separator: " ")

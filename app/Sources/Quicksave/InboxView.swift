@@ -5,7 +5,6 @@ import SwiftUI
 struct InboxView: View {
     @ObservedObject var store: Store
     @FocusState private var deckFocused: Bool
-    @FocusState private var editorFocused: Bool
     @State private var editing = false
     @State private var draft = ""
     @State private var newDate = Date()
@@ -169,13 +168,9 @@ struct InboxView: View {
                 Text(item.id).font(Theme.Text.code).foregroundStyle(Theme.Palette.textSecondary)
             }
             Text(item.issue.title).font(Theme.Text.cardTitle).fixedSize(horizontal: false, vertical: true)
-            TextEditor(text: $draft)
-                .font(Theme.Text.body)
-                .scrollContentBackground(.hidden)
+            QSTextArea(text: $draft, minLines: 8, maxLines: 20, autofocus: true)
                 .padding(Theme.Space.s)
-                .frame(minHeight: Theme.Size.editorMinHeight)
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(Theme.Palette.well))
-                .focused($editorFocused)
             Text("For example: reassign it to Gonzalo and draft him a Slack message. An agent does it in Linear; any message comes back as a draft.")
                 .font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
         }
@@ -207,13 +202,9 @@ struct InboxView: View {
                 Text(item.id).font(Theme.Text.code).foregroundStyle(Theme.Palette.textSecondary)
             }
             Text(item.title).font(Theme.Text.cardTitle).fixedSize(horizontal: false, vertical: true)
-            TextEditor(text: $draft)
-                .font(Theme.Text.body)
-                .scrollContentBackground(.hidden)
+            QSTextArea(text: $draft, minLines: 8, maxLines: 20, autofocus: true)
                 .padding(Theme.Space.s)
-                .frame(minHeight: Theme.Size.editorMinHeight)
                 .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(Theme.Palette.well))
-                .focused($editorFocused)
             Text("One line per action. Type it or dictate it.").font(Theme.Text.meta).foregroundStyle(Theme.Palette.textSecondary)
         }
     }
@@ -313,7 +304,6 @@ struct InboxView: View {
         draft = ""
         instructing = true
         editing = true
-        editorFocused = true
         return true
     }
 
@@ -327,7 +317,6 @@ struct InboxView: View {
         guard !editing, case .triage(let item)? = store.currentCard else { return false }
         draft = item.willDo.map { "- " + $0 }.joined(separator: "\n")
         editing = true
-        editorFocused = true
         return true
     }
 

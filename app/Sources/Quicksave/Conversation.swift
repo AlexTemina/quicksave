@@ -74,8 +74,8 @@ struct QSConversation<Proposal: View>: View {
                 }
             }
             HStack(alignment: .bottom, spacing: Theme.Space.s) {
-                QSPromptField(text: $text, placeholder: waitingOnHim ? "Answer its question" : placeholder,
-                              enabled: !busy, submit: submit)
+                QSTextArea(text: $text, placeholder: waitingOnHim ? "Answer its question" : placeholder,
+                           enabled: !busy, minLines: 2, maxLines: 9, submit: submit)
                     .padding(Theme.Space.s)
                     .background(RoundedRectangle(cornerRadius: Theme.Radius.s).fill(Theme.Palette.well))
                     .overlay(RoundedRectangle(cornerRadius: Theme.Radius.s)
@@ -84,7 +84,7 @@ struct QSConversation<Proposal: View>: View {
                     .buttonStyle(QSHoverStyle()).foregroundStyle(Theme.Palette.accent)
                     .disabled(busy || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            Text("Return sends, Shift-Return adds a line.")
+            Text("Return sends, Shift-Return or Control-Return adds a line.")
                 .font(Theme.Text.micro).foregroundStyle(Theme.Palette.textTertiary)
         }
         .padding(Theme.Space.m)
@@ -160,92 +160,6 @@ struct QSConversation<Proposal: View>: View {
                     .opacity(pending || pendingId == nil ? 1 : 0.75)
                 }
             }
-        }
-    }
-}
-
-/// A prompt box: Return sends, Shift-Return adds a line. It grows with the text up to a few lines, then scrolls.
-struct QSPromptField: NSViewRepresentable {
-    @Binding var text: String
-    let placeholder: String
-    var enabled = true
-    let submit: () -> Void
-
-    func makeCoordinator() -> Coordinator { Coordinator(self) }
-
-    func makeNSView(context: Context) -> NSScrollView {
-        let scroll = NSTextView.scrollableTextView()
-        scroll.drawsBackground = false
-        scroll.hasVerticalScroller = true
-        scroll.autohidesScrollers = true
-        let tv = scroll.documentView as! NSTextView
-        tv.delegate = context.coordinator
-        tv.drawsBackground = false
-        tv.isRichText = false
-        tv.allowsUndo = true
-        tv.font = NSFont.systemFont(ofSize: 13)
-        tv.textContainerInset = NSSize(width: 0, height: 2)
-        tv.isAutomaticQuoteSubstitutionEnabled = false
-        tv.isAutomaticDashSubstitutionEnabled = false
-        context.coordinator.textView = tv
-        return scroll
-    }
-
-    func updateNSView(_ scroll: NSScrollView, context: Context) {
-        context.coordinator.parent = self
-        guard let tv = scroll.documentView as? NSTextView else { return }
-        if tv.string != text { tv.string = text }
-        tv.isEditable = enabled
-        tv.textColor = enabled ? .labelColor : .secondaryLabelColor
-        context.coordinator.placeholder.stringValue = placeholder
-        context.coordinator.placeholder.isHidden = !text.isEmpty
-        if context.coordinator.placeholder.superview == nil {
-            let p = context.coordinator.placeholder
-            p.translatesAutoresizingMaskIntoConstraints = false
-            tv.addSubview(p)
-            NSLayoutConstraint.activate([
-                p.leadingAnchor.constraint(equalTo: tv.leadingAnchor, constant: 5),
-                p.topAnchor.constraint(equalTo: tv.topAnchor, constant: 2),
-            ])
-        }
-    }
-
-    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
-        guard let tv = nsView.documentView as? NSTextView, let lm = tv.layoutManager, let tc = tv.textContainer else { return nil }
-        let width = proposal.width ?? 400
-        tc.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
-        lm.ensureLayout(for: tc)
-        let used = lm.usedRect(for: tc).height + tv.textContainerInset.height * 2
-        let line = (tv.font?.boundingRectForFont.height ?? 16)
-        return CGSize(width: width, height: min(max(used, line * 2.2), line * 9))
-    }
-
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var parent: QSPromptField
-        weak var textView: NSTextView?
-        let placeholder: NSTextField = {
-            let f = NSTextField(labelWithString: "")
-            f.textColor = .placeholderTextColor
-            f.font = NSFont.systemFont(ofSize: 13)
-            return f
-        }()
-
-        init(_ parent: QSPromptField) { self.parent = parent }
-
-        func textDidChange(_ notification: Notification) {
-            guard let tv = notification.object as? NSTextView else { return }
-            parent.text = tv.string
-            placeholder.isHidden = !tv.string.isEmpty
-        }
-
-        func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
-            guard selector == #selector(NSResponder.insertNewline(_:)) else { return false }
-            if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
-                textView.insertNewlineIgnoringFieldEditor(nil)
-            } else {
-                parent.submit()
-            }
-            return true
         }
     }
 }

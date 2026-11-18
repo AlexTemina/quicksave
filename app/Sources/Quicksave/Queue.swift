@@ -117,9 +117,13 @@ enum QueueOrder {
     static func sorted(_ issues: [Linear.QueueIssue]) -> [Linear.QueueIssue] {
         let today = Morning.today
         func key(_ i: Linear.QueueIssue) -> (Int, String, Int, Double) {
-            let bucket = i.dueDate.map { $0 <= today ? 0 : 1 } ?? 2
+            // Due today or before, then whatever someone is waiting on (Answer, Unblock, Review), then by date,
+            // and tracking-only cards last.
+            let kind = CardKind.of(labels: i.labelNames, title: i.title, identifier: i.identifier)
+            let bucket = i.dueDate.map { $0 <= today ? 0 : 2 } ?? 3
+            let placed = bucket == 0 ? 0 : kind == .track ? 4 : kind?.someoneWaits == true ? 1 : bucket
             let priority = (i.priority ?? 0) == 0 ? 5 : i.priority!
-            return (bucket, i.dueDate ?? "9999", priority, i.estimate ?? 99)
+            return (placed, i.dueDate ?? "9999", priority, i.estimate ?? 99)
         }
         return issues.sorted { key($0) < key($1) }
     }

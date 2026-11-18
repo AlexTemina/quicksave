@@ -983,3 +983,112 @@ struct QSTabBar<Tab: Hashable>: View {
         .background(RoundedRectangle(cornerRadius: Theme.Radius.m).fill(Theme.Palette.well))
     }
 }
+
+/// Every box where he types more than a word. The keys are the same everywhere (17-nov):
+/// - Return sends when the box has something to send (`submit`), and adds a line when it is a multi-line box.
+/// - Shift-Return and Control-Return always add a line.
+/// It grows with the text between `minLines` and `maxLines`, then scrolls. Single-line fields stay SwiftUI `TextField`s.
+struct QSTextArea: NSViewRepresentable {
+    @Binding var text: String
+    var placeholder = ""
+    var enabled = true
+    var minLines: CGFloat = 1
+    var maxLines: CGFloat = 10
+    /// Takes the keyboard when it appears.
+    var autofocus = false
+    var submit: (() -> Void)? = nil
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> NSScrollView {
+        let scroll = NSTextView.scrollableTextView()
+        scroll.drawsBackground = false
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        let tv = scroll.documentView as! NSTextView
+        tv.delegate = context.coordinator
+        tv.drawsBackground = false
+        tv.isRichText = false
+        tv.allowsUndo = true
+        tv.font = NSFont.systemFont(ofSize: 13)
+        tv.textContainerInset = NSSize(width: 0, height: 2)
+        tv.isAutomaticQuoteSubstitutionEnabled = false
+        tv.isAutomaticDashSubstitutionEnabled = false
+        tv.string = text
+        context.coordinator.textView = tv
+        if autofocus {
+            DispatchQueue.main.async { tv.window?.makeFirstResponder(tv) }
+        }
+        return scroll
+    }
+
+    func updateNSView(_ scroll: NSScrollView, context: Context) {
+        context.coordinator.parent = self
+        guard let tv = scroll.documentView as? NSTextView else { return }
+        if tv.string != text { tv.string = text }
+        tv.isEditable = enabled
+        tv.textColor = enabled ? .labelColor : .secondaryLabelColor
+        let p = context.coordinator.placeholder
+        p.stringValue = placeholder
+        p.isHidden = !text.isEmpty
+        if p.superview == nil {
+            p.translatesAutoresizingMaskIntoConstraints = false
+            tv.addSubview(p)
+            NSLayoutConstraint.activate([
+                p.leadingAnchor.constraint(equalTo: tv.leadingAnchor, constant: 5),
+                p.topAnchor.constraint(equalTo: tv.topAnchor, constant: 2),
+                p.trailingAnchor.constraint(lessThanOrEqualTo: tv.trailingAnchor, constant: -5),
+            ])
+        }
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: NSScrollView, context: Context) -> CGSize? {
+        guard let tv = nsView.documentView as? NSTextView, let lm = tv.layoutManager, let tc = tv.textContainer,
+              let font = tv.font else { return nil }
+        let width = proposal.width ?? 400
+        tc.containerSize = NSSize(width: width, height: .greatestFiniteMagnitude)
+        lm.ensureLayout(for: tc)
+        let inset = tv.textContainerInset.height * 2
+        let used = lm.usedRect(for: tc).height + inset
+        let line = lm.defaultLineHeight(for: font)
+        return CGSize(width: width, height: min(max(used, line * minLines + inset), line * maxLines + inset))
+    }
+
+    final class Coordinator: NSObject, NSTextViewDelegate {
+        var parent: QSTextArea
+        weak var textView: NSTextView?
+        let placeholder: NSTextField = {
+            let f = NSTextField(labelWithString: "")
+            f.textColor = .placeholderTextColor
+            f.font = NSFont.systemFont(ofSize: 13)
+            f.maximumNumberOfLines = 0
+            f.lineBreakMode = .byWordWrapping
+            return f
+        }()
+
+        init(_ parent: QSTextArea) { self.parent = parent }
+
+        func textDidChange(_ notification: Notification) {
+            guard let tv = notification.object as? NSTextView else { return }
+            parent.text = tv.string
+            placeholder.isHidden = !tv.string.isEmpty
+        }
+
+        func textView(_ textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+            // Return is insertNewline; Control-Return comes as insertLineBreak, which would put a Unicode line separator
+            // (not a newline) in the text; Option-Return as insertNewlineIgnoringFieldEditor.
+            let returns = [#selector(NSResponder.insertNewline(_:)), #selector(NSResponder.insertLineBreak(_:)),
+                           #selector(NSResponder.insertNewlineIgnoringFieldEditor(_:)),
+                           #selector(NSResponder.insertParagraphSeparator(_:))]
+            guard returns.contains(selector) else { return false }
+            let mods = NSApp.currentEvent?.modifierFlags ?? []
+            if let submit = parent.submit, selector == #selector(NSResponder.insertNewline(_:)),
+               mods.isDisjoint(with: [.shift, .control, .option]) {
+                submit()
+            } else {
+                textView.insertText("\n", replacementRange: textView.selectedRange())
+            }
+            return true
+        }
+    }
+}

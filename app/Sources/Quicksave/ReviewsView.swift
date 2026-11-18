@@ -364,8 +364,8 @@ private struct ReviewDetail: View {
                 ForEach(c.thread ?? []) { post($0, new: fresh.contains("r\($0.id)")) }
                 HStack(alignment: .top, spacing: Theme.Space.s) {
                     Image(systemName: "arrowshape.turn.up.left").foregroundStyle(Theme.Palette.textTertiary).padding(.top, Theme.Space.s)
-                    TextField("Reply in this thread", text: Binding(get: { c.reply ?? "" }, set: { v in replyEdit(c.id, v) }), axis: .vertical)
-                        .textFieldStyle(.plain).font(Theme.Text.body).lineLimit(1...10).disabled(busy)
+                    QSTextArea(text: Binding(get: { c.reply ?? "" }, set: { v in replyEdit(c.id, v) }),
+                               placeholder: "Reply in this thread", enabled: !busy, maxLines: 10)
                         .padding(Theme.Space.s)
                         .background(RoundedRectangle(cornerRadius: Theme.Radius.xs).fill(Theme.Palette.well))
                     if c.pendingReply != nil { notPublishedTag }
@@ -435,12 +435,7 @@ private struct ReviewDetail: View {
     }
 
     private func editor(_ text: Binding<String>, locked: Bool) -> some View {
-        TextField("", text: text, axis: .vertical)
-            .textFieldStyle(.plain)
-            .font(Theme.Text.body)
-            .lineLimit(1...20)
-            .disabled(locked)
-            .foregroundStyle(locked ? Theme.Palette.textSecondary : Theme.Palette.textPrimary)
+        QSTextArea(text: text, enabled: !locked, maxLines: 20)
             .padding(Theme.Space.s)
             .background(RoundedRectangle(cornerRadius: Theme.Radius.xs).fill(Theme.Palette.well))
     }

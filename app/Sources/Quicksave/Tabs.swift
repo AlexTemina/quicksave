@@ -20,6 +20,10 @@ extension Store {
             // Something that moved on a card counts as new each time it moves.
             let news = watchNews.map { "news:\($0.key):\($0.value.at.timeIntervalSince1970)" }
             return Set(pieces + news)
+        case .oncall:
+            let cards = (onCall.review?.items ?? []).filter { $0.open }.map { "oc:\($0.id)" }
+            return Set(cards + onCall.slackCalls.filter { !onCall.seenCalls.contains($0.id) }.map { "slack:\($0.id)" })
+        case .asks: return Set(waitingAsks.map(\.id))
         case .inbox: return Set(pendingCards.map(\.id))
         case .reviews: return Set(reviewRequests.map { "pr:\($0.number)" })
         case .drafts: return Set(drafts.map { "draft:\($0.id)" })

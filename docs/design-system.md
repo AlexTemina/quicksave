@@ -9,8 +9,8 @@ Native macOS, sober. Light and dark mode come from the system's semantic colors.
 
 ## Tabs and what is new (12-nov)
 
-- The tabs on top (Today, Inbox, Reviews, Drafts, Agents) say how many items each has and, in a red macOS-style badge (just the number), how many are new since he last looked at that tab.
-- New means an item he has not seen in that tab: a new piece, side quest or collectible, or a card that moved, in Today; a new card in Inbox; a new pull request, reply or commit in Reviews; a new draft in Drafts; a run that failed or needs him in Agents.
+- The tabs on top (Today, On-call during a shift, Asked of me, Inbox, Reviews, Drafts, Agents) say how many items each has and, in a red macOS-style badge (just the number), how many are new since he last looked at that tab.
+- New means an item he has not seen in that tab: a new piece, side quest or collectible, or a card that moved, in Today; a new card in Inbox; a new pull request, reply or commit in Reviews; a new draft in Drafts; a new ask still waiting on him in Asked of me; a run that failed or needs him in Agents.
 - The tab in front, with the window active, has nothing new. Replies and commits in Reviews stay new until he opens that pull request.
 
 ## Talking to the AI (11-nov)
@@ -22,7 +22,7 @@ Every place where he writes a prompt and an AI acts uses one conversation, so th
 - While it works, what it is doing right now in a few words ("Reading Linear", "Reading Slack", "Writing the answer"), read live from the agent.
 - What it proposes (a text, a plan) shown as it will look, with one button that says exactly what accepting does. Nothing is used or written before that button.
 - Optional quick buttons with ready-made messages.
-- The box: Return sends, Shift-Return adds a line. It grows with the text, then scrolls.
+- The box: Return sends, Shift-Return or Control-Return adds a line. It grows with the text, then scrolls.
 
 Built so far in Drafts. Next: Tuesday's rituals, the morning, the inbox.
 
@@ -34,3 +34,10 @@ Built so far in Drafts. Next: Tuesday's rituals, the morning, the inbox.
 - Any other web page: its site, title and summary. Wikipedia through its own summary service.
 - Slack links get no card yet: reading Slack fast needs a token the app does not have.
 - The card hides a moment after the pointer leaves, unless the pointer moved onto it. Each link is read once per session. A link with a card has no tooltip.
+
+## Typing boxes (17-nov)
+
+The same keys in every box of the app:
+
+- **Return:** in a one-line box, or a box made to send (the AI conversation), it sends. In a multi-line box (a review comment, a reply, a draft, the inbox's editor, the morning's comments, Tuesday's rituals) it adds a line.
+- **Shift-Return and Control-Return:** add a line wherever the box takes more than one.

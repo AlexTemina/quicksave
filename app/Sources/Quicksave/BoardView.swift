@@ -30,6 +30,7 @@ struct BoardContent: View {
                 if let contract = store.contract {
                     WeekContractCard(contract: contract, issues: store.contractIssues) { store.color(of: $0, fallback: Column.of(name: $0, type: "").fallbackHex) }
                 }
+                if let q = store.onCallQuest { OnCallQuestCard(quest: q, store: store) }
                 if let quest = store.quest {
                     QSDayProgress(mainDone: quest.doneCount, mainTotal: quest.pieces.count,
                                   sideDone: store.sideQuests.filter { $0.column == .done }.count, sideTotal: store.sideQuests.count)
@@ -208,6 +209,11 @@ struct PieceCard: View {
                 if unseen, let agent { QSAgentTag(agent: agent, unseen: true) }
                 if let due = piece.dueDate { QSDue(ymd: due, done: piece.column == .done) }
                 PRStack(prs: piece.pullRequests, live: store.prStatus).fixedSize()
+                let drafts = store.drafts(for: piece.id).count
+                if drafts > 0 {
+                    QSTag(text: drafts == 1 ? "1 draft" : "\(drafts) drafts", icon: "square.and.pencil", color: Theme.Palette.accent).fixedSize()
+                        .help("Drafts written for this card. Open the card to see them.")
+                }
                 if store.agentStates[piece.id] == nil, worktree?.liveAgentTerminal != nil {
                     QSTag(text: "Agent", icon: Theme.Icon.agentLive, color: .green).fixedSize()
                         .help("A Claude agent is live in this issue's Orca worktree")
@@ -247,9 +253,16 @@ struct PieceCard: View {
                 }
                 .help("Actions done in the issue")
             }
+            // What it asks of him, at the bottom right, apart from the pull request and reply colors at the top.
+            if let kind = piece.kind {
+                HStack { Spacer(minLength: 0); QSKindTag(kind: kind, origin: piece.origin).fixedSize() }
+            }
         }, onHoverChange: { hovering = $0 })
         .help(agent.map { a in a.lastMessage.isEmpty ? a.name : "Agent: " + String(a.lastMessage.prefix(300)) } ?? "")
         .onTapGesture { store.markSeen(agent); showDetail = true }
+        // A draft asked to show this card.
+        .onAppear { if store.focusCard == piece.id { store.focusCard = nil; showDetail = true } }
+        .onChange(of: store.focusCard) { _, id in if id == piece.id { store.focusCard = nil; showDetail = true } }
         .popover(isPresented: $showDetail, arrowEdge: .bottom) {
             ScrollView {
                 PieceDetail(index: ((piece.isSide ? store.sideQuests : store.quest?.pieces ?? []).firstIndex { $0.id == piece.id } ?? 0) + 1, piece: piece,
@@ -334,7 +347,25 @@ struct PieceDetail: View {
                 Text(piece.title).font(Theme.Text.heroTitle).fixedSize(horizontal: false, vertical: true)
                 if let agent = store.agentStates[piece.id] {
                     // A reply that arrives while the detail is open is seen.
-                    AgentReplyBox(agent: agent).onChange(of: agent.updatedAt) { store.markSeen(agent) }
+                    AgentReplyBox(agent: agent).onChange(of: agent.replyID) { store.markSeen(agent) }
+                }
+                let drafts = store.drafts(for: piece.id)
+                if !drafts.isEmpty {
+                    DetailSection(title: "Drafts", icon: "square.and.pencil", trailing: "\(drafts.count)") {
+                        ForEach(drafts) { d in
+                            Button { store.focusDraft = d.id; store.tab = .drafts } label: {
+                                HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {
+                                    QSTag(text: d.place, icon: "paperplane", color: Theme.Palette.accent)
+                                    Text(d.note.isEmpty ? String(d.body.prefix(90)) : d.note).font(Theme.Text.body).lineLimit(2)
+                                        .multilineTextAlignment(.leading)
+                                    Spacer(minLength: 0)
+                                    Text(QSDate.ago(d.created)).font(Theme.Text.meta).foregroundStyle(Theme.Palette.textTertiary)
+                                }
+                            }
+                            .buttonStyle(QSHoverStyle())
+                            .help("Open this draft in Drafts")
+                        }
+                    }
                 }
                 if !piece.step.isEmpty {
                     HStack(alignment: .firstTextBaseline, spacing: Theme.Space.s) {

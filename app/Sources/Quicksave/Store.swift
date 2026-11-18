@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import Foundation
 
-enum AppTab: String, Hashable, CaseIterable { case today, inbox, reviews, drafts, agents }
+enum AppTab: String, Hashable, CaseIterable { case today, oncall, asks, inbox, reviews, drafts, agents }
 
 @MainActor
 final class Store: ObservableObject {
@@ -12,6 +12,8 @@ final class Store: ObservableObject {
         case "drafts": return .drafts
         case "reviews": return .reviews
         case "agents": return .agents
+        case "asks": return .asks
+        case "oncall": return .oncall
         default: return .today
         }
     }()
@@ -31,6 +33,7 @@ final class Store: ObservableObject {
     @Published var morningNotice: String?
     @Published var gameOptions: [GameOption] = []
     @Published var gamesLoading = false
+    @Published var gameSearching = false
     @Published var gameHistory: [GameEntry] = []
     @Published var standupWriting = false
     @Published var standupDone = false
@@ -41,7 +44,7 @@ final class Store: ObservableObject {
     private var offeredGames: [String] = []
     private var morningDay = Morning.today
 
-    var morningBusy: Bool { morningProposing || morningWriting || gamesLoading || standupWriting }
+    var morningBusy: Bool { morningProposing || morningWriting || gamesLoading || gameSearching || standupWriting }
 
     func openMorning() {
         if morningDay != Morning.today && !morningBusy { resetMorning() }
@@ -110,8 +113,9 @@ final class Store: ObservableObject {
     /// The open Main Quest, as the app reads it from Linear, for the planner. It must not guess this (16-nov it read
     /// TEMI-577 as closed because it was not in its list, and the write refused the plan).
     private var openQuestFact: String {
-        guard let q = quest else { return "None: no Main Quest is open in Linear." }
-        return "\(q.identifier) \"\(q.title)\", \(q.stateName), due \(q.dueDate ?? "with no date"), \(q.doneCount) of \(q.pieces.count) pieces done."
+        let shift = onShiftToday ? " He is on the Spain Eng on-call today: count the shift as busy time and keep the plan light." : ""
+        guard let q = quest else { return "None: no Main Quest is open in Linear." + shift }
+        return "\(q.identifier) \"\(q.title)\", \(q.stateName), due \(q.dueDate ?? "with no date"), \(q.doneCount) of \(q.pieces.count) pieces done." + shift
     }
 
     /// The plan replaces an open Main Quest: he must say how that one ends before approving.
@@ -190,6 +194,13 @@ final class Store: ObservableObject {
         await refresh()
     }
 
+    /// What the game jobs know of the day: his comments and the plan.
+    private var gameMood: String {
+        var mood = "His comments: \(morningComments.isEmpty ? "none" : morningComments)"
+        if let plan = morningPlan { mood += "\nToday's Main Quest: \(plan.goal). Why: \(plan.why)\nMeetings: \(plan.meetings.joined(separator: "; "))" }
+        return mood
+    }
+
     /// Five games for today, never one already used or already offered.
     func loadGames() async {
         guard !gamesLoading else { return }
@@ -198,16 +209,35 @@ final class Store: ObservableObject {
         if gameHistory.isEmpty { loadGameHistory() }
         let used = gameHistory.map(\.game)
         let usedKeys = Set(used.map(GameOption.key))
-        var mood = "His comments: \(morningComments.isEmpty ? "none" : morningComments)"
-        if let plan = morningPlan { mood += "\nToday's Main Quest: \(plan.goal). Why: \(plan.why)\nMeetings: \(plan.meetings.joined(separator: "; "))" }
         do {
-            let run = try await Agents.run(.games(mood: mood, used: used, offered: offeredGames))
+            let run = try await Agents.run(.games(mood: gameMood, used: used, offered: offeredGames))
             let fresh = try JSONDecoder().decode(GameOptions.self, from: Data(run.resultJSON.utf8)).games
                 .filter { !usedKeys.contains(GameOption.key($0.game)) && !offeredGames.contains($0.game) }
             offeredGames += fresh.map(\.game)
             gameOptions = fresh
         } catch {
             morningNotice = "No games came back: \(error.localizedDescription)"
+        }
+    }
+
+    /// The game he typed, put first among the options. Already played is allowed: the card warns, it never blocks.
+    func findGame(_ query: String) async -> [GameOption] {
+        guard !gameSearching else { return [] }
+        gameSearching = true
+        morningNotice = nil
+        defer { gameSearching = false }
+        if gameHistory.isEmpty { loadGameHistory() }
+        do {
+            let run = try await Agents.run(.typedGame(query, mood: gameMood))
+            let found = try JSONDecoder().decode(GameOptions.self, from: Data(run.resultJSON.utf8)).games
+            guard !found.isEmpty else { morningNotice = "No game matched \"\(query)\"."; return [] }
+            let keys = Set(found.map { GameOption.key($0.game) })
+            gameOptions = found + gameOptions.filter { !keys.contains(GameOption.key($0.game)) }
+            offeredGames += found.map(\.game)
+            return found
+        } catch {
+            morningNotice = "Could not find that game: \(error.localizedDescription)"
+            return []
         }
     }
 
@@ -255,7 +285,7 @@ final class Store: ObservableObject {
         draftsNotice = nil
         defer { draftingIds.remove(draft.id) }
         do {
-            let run = try await Agents.run(.slackDraft(text: draft.body, note: draft.note, link: draft.link?.absoluteString))
+            let run = try await Agents.run(.slackDraft(text: SlackDraftText.normalized(draft.body), note: draft.note, link: draft.link?.absoluteString))
             let result = try JSONDecoder().decode(SlackDraftResult.self, from: Data(run.resultJSON.utf8))
             if result.outcome == "drafted" {
                 Database.shared.markDrafted(draft.id, link: result.link)
@@ -310,7 +340,8 @@ final class Store: ObservableObject {
             }
             let result = try JSONDecoder().decode(DraftTalkResult.self, from: Data(run.resultJSON.utf8))
             if let id = run.sessionId { Database.shared.setDraftSession(draft.id, session: id, dir: job.directory) }
-            if let text = result.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+            if var text = result.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty {
+                if draft.place == "Slack" { text = SlackDraftText.normalized(text) }
                 // A proposal: the draft keeps its text until he uses it.
                 Database.shared.addDraftTurn(draft.id, who: .agent, text: result.notes ?? "Rewritten.", body: text)
             } else {
@@ -391,6 +422,7 @@ final class Store: ObservableObject {
     /// when the work needs no worktree, the app opens the agent in the vault. Either way the tab carries the issue's
     /// code, which is how the card finds it next time.
     func startAgent(_ piece: Piece) async {
+        if piece.onCall { await startOnCallAgent(piece); return }
         guard !startingAgents.contains(piece.id) else { return }
         startingAgents.insert(piece.id)
         agentNotice = nil
@@ -448,19 +480,20 @@ final class Store: ObservableObject {
     @Published var unlinkedAgents: [Orca.AgentState] = []
     private var agentTimer: Timer?
 
-    /// When he last looked at each agent from Quicksave, as the agent's own `updatedAt` at that moment, by agent key.
+    /// The reply he last looked at from Quicksave, per agent key, as a fingerprint of its last message.
     /// Only a click in Quicksave counts (the card, its detail, its Orca button); looking in Orca does not (12-nov).
-    @Published var agentSeen: [String: Double] = Database.shared.value("agent.seen", as: [String: Double].self) ?? [:]
+    /// Orca's `updatedAt` moves on its own while an agent sits idle, so it cannot say a reply is new (18-nov).
+    @Published var agentSeen: [String: String] = Database.shared.value("agent.seenReply", as: [String: String].self) ?? [:]
 
-    /// The agent's turn ended and he has not looked at it from Quicksave since: a reply he has not seen.
+    /// The agent's turn ended and he has not looked at this reply from Quicksave yet.
     func isUnseen(_ agent: Orca.AgentState) -> Bool {
-        (agent.state == "done" || agent.state == "monitoring") && agent.updatedAt > (agentSeen[agent.key] ?? 0)
+        (agent.state == "done" || agent.state == "monitoring") && agentSeen[agent.key] != agent.replyID
     }
 
     func markSeen(_ agent: Orca.AgentState?) {
-        guard let agent, (agentSeen[agent.key] ?? 0) < agent.updatedAt else { return }
-        agentSeen[agent.key] = agent.updatedAt
-        Database.shared.setValue("agent.seen", agentSeen)
+        guard let agent, agentSeen[agent.key] != agent.replyID else { return }
+        agentSeen[agent.key] = agent.replyID
+        Database.shared.setValue("agent.seenReply", agentSeen)
     }
 
     private var agentsLoading = false
@@ -489,10 +522,12 @@ final class Store: ObservableObject {
         if states != agentStates { agentStates = states }
         if all.unlinked != unlinkedAgents { unlinkedAgents = all.unlinked }
         // Forget the marks of agents that are gone. An empty read may be Orca failing, so it forgets nothing.
-        let live = Set(states.values.map(\.key) + all.unlinked.map(\.key))
-        if !live.isEmpty, agentSeen.keys.contains(where: { !live.contains($0) }) {
-            agentSeen = agentSeen.filter { live.contains($0.key) }
-            Database.shared.setValue("agent.seen", agentSeen)
+        // By worktree, not by agent: an issue with two agents shows one, and the other must keep its mark (18-nov).
+        let live = Set((states.values.map(\.worktreeId) + all.unlinked.map(\.worktreeId)).filter { !$0.isEmpty })
+        func worktree(of key: String) -> String { String(key.prefix { $0 != "|" }) }
+        if !live.isEmpty, agentSeen.keys.contains(where: { !live.contains(worktree(of: $0)) }) {
+            agentSeen = agentSeen.filter { live.contains(worktree(of: $0.key)) }
+            Database.shared.setValue("agent.seenReply", agentSeen)
         }
         if !ciFixing.isEmpty { await followCIFixes(states) }
     }
@@ -634,7 +669,50 @@ final class Store: ObservableObject {
 
     @Published var prStatus: [Int: GitHub.Status] = [:]
 
+    // On-call: the shift, its review, the on-call Main Quest and its cards. See docs/oncall.md.
+    @Published var onCall: OnCallState = OnCall.saved()
+    @Published var onCallBusy = false
+    @Published var onCallStep: String?
+    @Published var onCallNotice: String?
+    @Published var onCallQuest: OnCall.Quest?
+    @Published var onCallCards: [Piece] = []
+    var onCallShiftLoading = false
+    /// On-call issues assigned to someone else, read every refresh: hidden from the review even if it proposed them.
+    @Published var onCallOthers: Set<String> = []
+    var onCallSlackLooked: Date?
+
+    /// A card to open, asked from a draft: the card that shows it opens its detail. A draft to show, asked from a card.
+    @Published var focusCard: String?
+    @Published var focusDraft: Int64?
+
+    /// Where a draft's card lives, and its tag: on Today, on the on-call board, or nowhere on the board.
+    func card(_ id: String) -> Piece? {
+        ((quest?.pieces ?? []) + sideQuests + looseWork + onCallCards).first { $0.id == id }
+    }
+
+    /// Opens a card from a draft: its tab, then its detail. A code with no card opens in Linear.
+    func openCard(_ id: String) {
+        if onCallCards.contains(where: { $0.id == id }) { tab = .oncall }
+        else if card(id) != nil { tab = .today }
+        else {
+            if let url = URL(string: "https://linear.app/alan-eu/issue/\(id)") { NSWorkspace.shared.open(url) }
+            return
+        }
+        focusCard = id
+    }
+
+    func drafts(for id: String) -> [DraftItem] { drafts.filter { $0.item == id } }
+
     // Reviews: pull requests waiting for his review, and the review prepared for each. See docs/reviews.md.
+    // Asked of me: mentions in GitHub, Linear, Slack, mail and Notion, with the card of each (Asks.swift).
+    @Published var asks: [Ask] = []
+    @Published var askCards: [String: AskCard] = [:]
+    @Published var asksError: String?
+    @Published var asksLoading = false
+    @Published var asksAgentRunning = false
+    @Published var creatingCard: Set<String> = []
+    var asksLooked: Date?
+    var asksAgentLooked: Date?
     @Published var reviewRequests: [ReviewRequest] = []
     /// State and CI of the pull requests he reviewed that are no longer requested.
     @Published var reviewedStatus: [Int: GitHub.Status] = [:]
@@ -715,6 +793,7 @@ final class Store: ObservableObject {
             }
             await refreshInbox(key: key)
             await refreshReviews()
+            await refreshAsks(key: key)
             let board = try await Linear.openMainQuests(key: key)
             let open = board.quests
             stateColors = board.stateColors
@@ -725,6 +804,7 @@ final class Store: ObservableObject {
             await refreshContract(key: key)
             await checkRituals(key: key)
             await refreshLoose(key: key)
+            await refreshOnCall(key: key)
             // Pieces, side quests and open worktrees alike: their Orca worktree and their pull requests' live state.
             let all = (quest?.pieces ?? []) + sideQuests + looseWork
             var found: [String: Orca.Match] = [:]
@@ -829,7 +909,8 @@ final class Store: ObservableObject {
                                                   sfaLink: r == .previously ? sfaLink : nil))
             let result = try JSONDecoder().decode(RitualResult.self, from: Data(run.resultJSON.utf8))
             for d in result.drafts {
-                Database.shared.addDraft(place: d.place, note: d.note ?? r.title, link: d.link, body: d.text, source: r.rawValue, item: nil,
+                let text = d.place == "Slack" ? SlackDraftText.normalized(d.text) : d.text
+                Database.shared.addDraft(place: d.place, note: d.note ?? r.title, link: d.link, body: text, source: r.rawValue, item: nil,
                                          session: run.sessionId, sessionDir: NSHomeDirectory() + "/vault")
             }
             loadDrafts()
@@ -857,7 +938,12 @@ final class Store: ObservableObject {
                 issues.first { $0.identifier == line.id }.map { Piece.from($0, order: i + 1, tag: line.tag, step: line.note, isSide: true) }
             }
         }
-        if let found = try? await Linear.myOpenIssues(key: key, label: "collectible") { collectibles = QueueOrder.sorted(found) }
+        // Collectibles: the old `collectible` label and the `Read` kind, which replaces it.
+        if let old = try? await Linear.myOpenIssues(key: key, label: "collectible"),
+           let read = try? await Linear.myOpenIssues(key: key, label: "Read") {
+            var seen = Set<String>()
+            collectibles = QueueOrder.sorted((old + read).filter { seen.insert($0.identifier).inserted })
+        }
     }
 
     /// Every open worktree whose issue is not the Main Quest, one of its pieces or a side quest of today.
@@ -892,7 +978,7 @@ final class Store: ObservableObject {
         guard let key = Database.shared.secret("linearApiKey"), let all = try? await Linear.myOpenIssues(key: key) else { return [] }
         var taken = Set(sideQuests.map(\.id) + (quest?.pieces.map(\.id) ?? []))
         if let q = quest { taken.insert(q.identifier) }
-        return QueueOrder.sorted(all.filter { !taken.contains($0.identifier) && !$0.labelNames.contains("collectible") })
+        return QueueOrder.sorted(all.filter { !taken.contains($0.identifier) && !$0.labelNames.contains("collectible") && !$0.labelNames.contains("Read") })
     }
 
     func addToToday(_ issue: Linear.QueueIssue) async {

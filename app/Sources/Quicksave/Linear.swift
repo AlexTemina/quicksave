@@ -11,21 +11,27 @@ struct LinearIssue: Decodable {
     struct Attachments: Decodable { let nodes: [Attachment] }
     struct Relation: Decodable { let type: String; let relatedIssue: LinearIssue? ; let issue: LinearIssue? }
     struct Relations: Decodable { let nodes: [Relation] }
+    struct Named: Decodable { let name: String }
+    struct Labels: Decodable { let nodes: [Named] }
     let identifier: String
     let title: String
     let description: String?
     let url: String
     let dueDate: String?
+    /// 0 none, 1 urgent, 2 high, 3 medium, 4 low.
+    var priority: Double? = nil
     let createdAt: String?
     let state: State
     let attachments: Attachments?
     let relations: Relations?
     let inverseRelations: Relations?
+    var labels: Labels? = nil
+    var labelNames: [String] { labels?.nodes.map(\.name) ?? [] }
 }
 
 /// Read-only Linear client. One GraphQL query returns the open Main Quest with its related pieces.
 enum Linear {
-    private static let pieceFields = "identifier title description url dueDate state { name type color } attachments { nodes { url title metadata } }"
+    private static let pieceFields = "identifier title description url dueDate priority state { name type color } labels { nodes { name } } attachments { nodes { url title metadata } }"
 
     struct Board { let quests: [LinearIssue]; let stateColors: [String: String] }
 
@@ -156,7 +162,7 @@ enum Linear {
 
     private static let queueFields = "identifier title url dueDate priority estimate state { name type color } labels { nodes { name } }"
 
-    private struct GQLError: Decodable { let message: String }
+    struct GQLError: Decodable { let message: String }
 
     /// Issues by their codes, in one request, whatever their state.
     static func issues(key: String, ids: [String]) async throws -> [QueueIssue] {
@@ -416,7 +422,7 @@ enum Linear {
         return (env.data?.initiativeUpdates.nodes ?? []).compactMap { QSDate.parse($0.createdAt) }.max()
     }
 
-    private static func send(_ query: String, key: String) async throws -> Data {
+    static func send(_ query: String, key: String) async throws -> Data {
         var req = URLRequest(url: URL(string: "https://api.linear.app/graphql")!)
         req.httpMethod = "POST"
         req.setValue(key, forHTTPHeaderField: "Authorization")

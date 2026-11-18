@@ -19,6 +19,9 @@ struct AgentJob {
     var resume: String? = nil
     /// Reads the result and says whether something in it is left for him, so the run shows as "needs you".
     var needsYou: (@Sendable (String) -> Bool)? = nil
+    /// Which settings it loads. His user settings carry MCP servers only they connect, like Alan Home; they also carry
+    /// his hooks, so only a job that needs such a server loads them.
+    var settingSources = "project,local"
 }
 
 struct AgentRun {
@@ -68,7 +71,7 @@ enum Agents {
         p.currentDirectoryURL = URL(fileURLWithPath: job.directory)
         // Settings of the project only: his global hooks (stop checks, state reporters) are noise for a job.
         // The prompt goes through standard input so the list options cannot swallow it.
-        var args: [String] = ["-p", "--model", job.model, "--permission-mode", "dontAsk", "--setting-sources", "project,local",
+        var args: [String] = ["-p", "--model", job.model, "--permission-mode", "dontAsk", "--setting-sources", job.settingSources,
                               "--max-turns", "\(job.maxTurns)", "--output-format", "stream-json", "--verbose"]
         args += ["--allowedTools", job.allowed.joined(separator: ","),
                  "--disallowedTools", job.denied.joined(separator: ","),
@@ -180,8 +183,15 @@ enum Agents {
 
     private static func parse(_ out: Data, _ err: Data, _ seconds: Double) throws -> AgentRun {
         let text = String(data: out, encoding: .utf8) ?? ""
-        guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"), start < end,
-              let obj = try? JSONSerialization.jsonObject(with: Data(text[start...end].utf8)) as? [String: Any] else {
+        // With his user settings, hooks may print lines of their own: the result is the line that says so.
+        let resultLine = text.components(separatedBy: "\n").lazy
+            .compactMap { try? JSONSerialization.jsonObject(with: Data($0.utf8)) as? [String: Any] }
+            .first { $0["type"] as? String == "result" }
+        let whole: [String: Any]? = {
+            guard let start = text.firstIndex(of: "{"), let end = text.lastIndex(of: "}"), start < end else { return nil }
+            return try? JSONSerialization.jsonObject(with: Data(text[start...end].utf8)) as? [String: Any]
+        }()
+        guard let obj = resultLine ?? whole else {
             let said = String(data: err, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             throw QuicksaveError.message("The agent returned nothing readable. \(said)")
         }
