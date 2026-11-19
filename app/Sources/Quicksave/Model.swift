@@ -20,7 +20,7 @@ enum Column: String, CaseIterable, Identifiable {
     static func of(name: String, type: String) -> Column {
         if let exact = Column(rawValue: name) { return exact }
         switch type {
-        case "completed", "canceled": return .done
+        case "completed", "canceled", "duplicate": return .done
         case "started": return .inProgress
         default: return .todo
         }
